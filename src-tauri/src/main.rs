@@ -7,7 +7,10 @@ use std::{
     net::{SocketAddr, TcpStream},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -15,7 +18,11 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 
 const API_PORT: u16 = 47899;
 
@@ -23,6 +30,7 @@ const API_PORT: u16 = 47899;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct ApiProcess(Mutex<Option<Child>>);
+struct AppExit(AtomicBool);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,15 +38,100 @@ pub fn run() {
         .setup(|app| {
             let child = start_helper_api(app.path().resource_dir()?);
             app.manage(ApiProcess(Mutex::new(child?)));
+            app.manage(AppExit(AtomicBool::new(false)));
+            setup_tray(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building laraboxs")
         .run(|app_handle, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
-                stop_helper_api(app_handle);
+            match event {
+                tauri::RunEvent::WindowEvent {
+                    event: WindowEvent::CloseRequested { api, .. },
+                    ..
+                } => {
+                    let is_quitting = app_handle
+                        .try_state::<AppExit>()
+                        .map(|state| state.0.load(Ordering::SeqCst))
+                        .unwrap_or(false);
+
+                    if !is_quitting {
+                        api.prevent_close();
+                        hide_main_window(app_handle);
+                    }
+                }
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    stop_helper_api(app_handle);
+                }
+                _ => {}
             }
         });
+}
+
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Open laraboxs", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "Hide window", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit laraboxs", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&show, &hide, &separator, &quit])?;
+
+    let mut tray = TrayIconBuilder::new()
+        .tooltip("laraboxs is running")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_window(app),
+            "hide" => hide_main_window(app),
+            "quit" => quit_app(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick { button, .. } = event {
+                if button == MouseButton::Left {
+                    show_main_window(tray.app_handle());
+                }
+                return;
+            }
+
+            if let TrayIconEvent::Click {
+                button,
+                button_state,
+                ..
+            } = event
+            {
+                if button == MouseButton::Left && button_state == MouseButtonState::Down {
+                    show_main_window(tray.app_handle());
+                }
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+
+    tray.build(app)?;
+    Ok(())
+}
+
+fn show_main_window(app_handle: &tauri::AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn hide_main_window(app_handle: &tauri::AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+fn quit_app(app_handle: &tauri::AppHandle) {
+    if let Some(state) = app_handle.try_state::<AppExit>() {
+        state.0.store(true, Ordering::SeqCst);
+    }
+    app_handle.exit(0);
 }
 
 fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std::error::Error>> {
