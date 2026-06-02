@@ -4,6 +4,52 @@ import path from "node:path";
 import { ensureBaseDirs, getPaths } from "./paths.js";
 import type { LaraboxsConfig } from "./types.js";
 
+const legacyDefaultPhpExtensions = [
+  "mbstring",
+  "openssl",
+  "pdo_mysql",
+  "mysqli",
+  "pdo_sqlite",
+  "sqlite3",
+  "fileinfo",
+  "curl",
+  "zip",
+  "intl",
+  "gd",
+  "sodium",
+  "exif"
+];
+
+const defaultPhpExtensions = [
+  "curl",
+  "fileinfo",
+  "mbstring",
+  "openssl",
+  "pdo_mysql",
+  "pdo_sqlite",
+  "mysqli",
+  "sqlite3",
+  "zip",
+  "gd",
+  "intl",
+  "bcmath",
+  "sodium",
+  "exif",
+  "ftp",
+  "imap",
+  "ldap",
+  "soap",
+  "sockets",
+  "xsl",
+  "redis",
+  "imagick",
+  "mongodb",
+  "pgsql",
+  "pdo_pgsql",
+  "sqlsrv",
+  "pdo_sqlsrv"
+];
+
 export function defaultConfig(): LaraboxsConfig {
   return {
     version: 1,
@@ -12,7 +58,16 @@ export function defaultConfig(): LaraboxsConfig {
     globalPhpVersion: "8.4",
     phpVersions: ["8.4", "8.5"],
     isolatedPhp: {},
+    siteEntryPaths: {},
     securedDomains: [],
+    php: {
+      memoryLimit: "512M",
+      uploadMaxFilesize: "64M",
+      postMaxSize: "64M",
+      maxExecutionTime: 60,
+      maxInputVars: 3000,
+      enabledExtensions: defaultPhpExtensions
+    },
     nginx: {
       httpPort: 80,
       httpsPort: 443,
@@ -23,6 +78,14 @@ export function defaultConfig(): LaraboxsConfig {
       port: 3306,
       rootUser: "root",
       instanceName: "default"
+    },
+    redis: {
+      version: "8.8",
+      port: 6379
+    },
+    mongodb: {
+      version: "8.2",
+      port: 27017
     }
   };
 }
@@ -63,6 +126,7 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
   ).sort((a, b) => a.localeCompare(b));
 
   const securedDomains = Array.from(new Set(input.securedDomains ?? defaults.securedDomains)).sort();
+  const inputPhp: Partial<LaraboxsConfig["php"]> = input.php ?? {};
 
   return {
     version: 1,
@@ -70,8 +134,17 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
     parkedFolders,
     globalPhpVersion: input.globalPhpVersion ?? defaults.globalPhpVersion,
     phpVersions: Array.from(new Set(input.phpVersions ?? defaults.phpVersions)).sort(),
-    isolatedPhp: input.isolatedPhp ?? defaults.isolatedPhp,
+    isolatedPhp: normalizeStringMap(input.isolatedPhp ?? defaults.isolatedPhp),
+    siteEntryPaths: normalizeStringMap(input.siteEntryPaths ?? defaults.siteEntryPaths),
     securedDomains,
+    php: {
+      memoryLimit: inputPhp.memoryLimit ?? defaults.php.memoryLimit,
+      uploadMaxFilesize: inputPhp.uploadMaxFilesize ?? defaults.php.uploadMaxFilesize,
+      postMaxSize: inputPhp.postMaxSize ?? defaults.php.postMaxSize,
+      maxExecutionTime: inputPhp.maxExecutionTime ?? defaults.php.maxExecutionTime,
+      maxInputVars: inputPhp.maxInputVars ?? defaults.php.maxInputVars,
+      enabledExtensions: normalizeExtensionList(enabledExtensionsWithDefaults(inputPhp.enabledExtensions))
+    },
     nginx: {
       ...defaults.nginx,
       ...(input.nginx ?? {})
@@ -79,6 +152,48 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
     mysql: {
       ...defaults.mysql,
       ...(input.mysql ?? {})
+    },
+    redis: {
+      ...defaults.redis,
+      ...(input.redis ?? {})
+    },
+    mongodb: {
+      ...defaults.mongodb,
+      ...(input.mongodb ?? {})
     }
   };
+}
+
+function normalizeExtensionList(extensions: string[]): string[] {
+  return Array.from(
+    new Set(
+      extensions
+        .map((extension) => extension.trim().toLowerCase())
+        .filter((extension) => /^[a-z0-9_]+$/.test(extension))
+    )
+  ).sort();
+}
+
+function normalizeStringMap(input: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(input).filter(([key, value]) => key.trim() && typeof value === "string" && value.trim())
+  );
+}
+
+function enabledExtensionsWithDefaults(extensions: string[] | undefined): string[] {
+  if (!extensions) {
+    return defaultPhpExtensions;
+  }
+
+  const normalized = normalizeExtensionList(extensions);
+  if (hasEveryExtension(normalized, legacyDefaultPhpExtensions)) {
+    return [...normalized, ...defaultPhpExtensions];
+  }
+
+  return normalized;
+}
+
+function hasEveryExtension(extensions: string[], requiredExtensions: string[]): boolean {
+  const extensionSet = new Set(extensions);
+  return requiredExtensions.every((extension) => extensionSet.has(extension));
 }

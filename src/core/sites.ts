@@ -37,6 +37,27 @@ export async function unisolateSite(identifier: string): Promise<LaraboxsConfig>
   });
 }
 
+export async function setSiteEntryPath(identifier: string, entryPath: string): Promise<LaraboxsConfig> {
+  const site = await findSite(identifier);
+  const normalizedEntry = await validateSiteEntryPath(site.path, entryPath);
+  const defaultEntry = defaultSiteEntryPath(site.framework);
+
+  return updateConfig((config) => {
+    if (normalizedEntry === defaultEntry) {
+      delete config.siteEntryPaths[site.domain];
+    } else {
+      config.siteEntryPaths[site.domain] = normalizedEntry;
+    }
+  });
+}
+
+export async function resetSiteEntryPath(identifier: string): Promise<LaraboxsConfig> {
+  const site = await findSite(identifier);
+  return updateConfig((config) => {
+    delete config.siteEntryPaths[site.domain];
+  });
+}
+
 export async function setSiteSecurity(identifier: string, secured: boolean): Promise<LaraboxsConfig> {
   const site = await findSite(identifier);
   return updateConfig((config) => {
@@ -106,7 +127,9 @@ export async function siteFromProject(projectPath: string, config: LaraboxsConfi
   const name = path.basename(projectPath);
   const domain = `${slugify(name)}.${config.tld}`;
   const framework = await detectFramework(projectPath);
-  const documentRoot = framework === "Laravel" ? path.join(projectPath, "public") : projectPath;
+  const defaultEntryPath = defaultSiteEntryPath(framework);
+  const entryPath = resolveConfiguredSiteEntryPath(projectPath, config.siteEntryPaths[domain] ?? defaultEntryPath, defaultEntryPath);
+  const documentRoot = path.join(projectPath, entryPath);
   const secured = config.securedDomains.includes(domain);
   const phpVersion = config.isolatedPhp[domain] ?? config.globalPhpVersion;
 
@@ -116,6 +139,7 @@ export async function siteFromProject(projectPath: string, config: LaraboxsConfi
     url: `${secured ? "https" : "http"}://${domain}`,
     path: path.resolve(projectPath),
     documentRoot: path.resolve(documentRoot),
+    entryPath,
     secured,
     phpVersion,
     framework
@@ -158,6 +182,69 @@ function ensureKnownPhpVersion(config: LaraboxsConfig, version: string): void {
     config.phpVersions.push(version);
     config.phpVersions.sort();
   }
+}
+
+function defaultSiteEntryPath(framework: Framework): string {
+  return framework === "Laravel" ? "public" : ".";
+}
+
+async function validateSiteEntryPath(projectPath: string, entryPath: string): Promise<string> {
+  const normalizedEntry = normalizeSiteEntryPath(entryPath);
+  const root = path.resolve(projectPath);
+  const resolvedEntry = path.resolve(root, normalizedEntry);
+  const relative = path.relative(root, resolvedEntry);
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Nginx entry must be inside the site folder.");
+  }
+
+  try {
+    const info = await stat(resolvedEntry);
+    if (!info.isDirectory()) {
+      throw new Error("Nginx entry must point to a directory.");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "Nginx entry must point to a directory.") {
+      throw error;
+    }
+    throw new Error(`Nginx entry folder does not exist: ${resolvedEntry}`);
+  }
+
+  return normalizedEntry;
+}
+
+function resolveConfiguredSiteEntryPath(projectPath: string, entryPath: string, fallback: string): string {
+  try {
+    const normalizedEntry = normalizeSiteEntryPath(entryPath);
+    const root = path.resolve(projectPath);
+    const resolvedEntry = path.resolve(root, normalizedEntry);
+    const relative = path.relative(root, resolvedEntry);
+    if (relative.startsWith("..") || path.isAbsolute(relative) || !existsSync(resolvedEntry)) {
+      return fallback;
+    }
+    return normalizedEntry;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeSiteEntryPath(entryPath: string): string {
+  const trimmed = entryPath.trim();
+  if (!trimmed || trimmed === ".") {
+    return ".";
+  }
+  if (path.isAbsolute(trimmed)) {
+    throw new Error("Nginx entry must be relative to the site folder.");
+  }
+
+  const normalized = path.normalize(trimmed).replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!normalized || normalized === ".") {
+    return ".";
+  }
+  if (normalized === ".." || normalized.startsWith("../")) {
+    throw new Error("Nginx entry must be inside the site folder.");
+  }
+  return normalized;
 }
 
 function normalizePathForCompare(value: string): string {

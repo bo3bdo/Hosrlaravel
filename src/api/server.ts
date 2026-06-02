@@ -1,18 +1,42 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { addParkedFolder, isolateSite, setGlobalPhpVersion, unisolateSite } from "../core/sites.js";
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { addParkedFolder, isolateSite, resetSiteEntryPath, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
 import { syncHostsFile } from "../core/hosts.js";
-import { laravelEnv, mysqlShellCommand, runCreateDatabase, runMysql, setMysqlPort } from "../core/mysql.js";
-import { runNginx, writeNginxConfigs } from "../core/nginx.js";
-import { secureSite, unsecureSite } from "../core/ssl.js";
+import {
+  findAvailableMysqlPort,
+  getMysqlRootPassword,
+  initializeMysqlDataDir,
+  laravelEnv,
+  openMysqlShell,
+  runCreateDatabase,
+  runMysql,
+  resetMysqlRootPassword,
+  changeMysqlRootPassword,
+  setMysqlPort,
+  setMysqlVersion
+} from "../core/mysql.js";
+import { findAvailableMongoDbPort, runMongoDb, setMongoDbPort } from "../core/mongodb.js";
+import { getNginxStatus, runNginx, updateNginxSettings, writeNginxConfigs } from "../core/nginx.js";
+import { getPhpFastCgiStatus, getPhpSettings, runPhpFastCgi, updatePhpSettings } from "../core/php.js";
+import { getPhpMyAdminStatus, installPhpMyAdmin, writePhpMyAdminConfig } from "../core/phpmyadmin.js";
+import { findAvailableRedisPort, redisCliCommand, runRedis, setRedisPort } from "../core/redis.js";
+import { uninstallRuntime } from "../core/runtimes.js";
+import { getRuntimeInstallJob, listRuntimeInstallJobs, startRuntimeInstallJob } from "./runtimeJobs.js";
+import { selectFolder } from "./dialogs.js";
+import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
 import { getDashboardSummary } from "../core/summary.js";
-import type { ServiceAction } from "../core/types.js";
+import type { RuntimeKind, ServiceAction } from "../core/types.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.LARABOXS_API_PORT ?? 47899);
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const builtUiRoot = path.join(projectRoot, "dist-ui");
 
 const server = http.createServer(async (request, response) => {
-  response.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:5173");
+  response.setHeader("Access-Control-Allow-Origin", corsOrigin(request.headers.origin));
   response.setHeader("Access-Control-Allow-Headers", "Content-Type");
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 
@@ -30,11 +54,27 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/phpmyadmin/status") {
+      await sendJson(response, getPhpMyAdminStatus());
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/sites/park") {
       const body = await readJson(request);
       await addParkedFolder(assertString(body.path, "path"));
       await writeNginxConfigs();
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "POST" && (url.pathname === "/api/dialog/folder" || url.pathname === "/api/dialogs/folder")) {
+      const body = await readJson(request);
+      if (body.probe === true) {
+        await sendJson(response, { ok: true, available: true });
+        return;
+      }
+      const selectedPath = await selectFolder({ initialPath: typeof body.initialPath === "string" ? body.initialPath : undefined });
+      await sendJson(response, { ok: true, path: selectedPath });
       return;
     }
 
@@ -45,10 +85,47 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/sites/entry") {
+      const body = await readJson(request);
+      const site = assertString(body.site, "site");
+      if (body.entry === null) {
+        await resetSiteEntryPath(site);
+      } else {
+        await setSiteEntryPath(site, assertString(body.entry, "entry"));
+      }
+      await writeNginxConfigs();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/php/use") {
       const body = await readJson(request);
       await setGlobalPhpVersion(assertString(body.version, "version"));
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/php/settings") {
+      const version = url.searchParams.get("version") ?? undefined;
+      await sendJson(response, await getPhpSettings(version));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/php/settings") {
+      const body = await readJson(request);
+      const wasRunning = (await getPhpFastCgiStatus()).state === "running";
+      const settings = await updatePhpSettings(assertPhpSettings(body.settings ?? body));
+      const php = wasRunning ? await runPhpFastCgi("restart") : await getPhpFastCgiStatus();
+      await sendJson(response, { ok: true, settings, php, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/api/php-fcgi/")) {
+      const action = serviceAction(url.pathname.split("/").at(-1));
+      await sendJson(response, await runPhpFastCgi(action));
       return;
     }
 
@@ -66,6 +143,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/nginx/settings") {
+      const body = await readJson(request);
+      const settings = await updateNginxSettings(assertNginxSettings(body.settings ?? body));
+      await writeNginxConfigs();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, settings, summary: await getDashboardSummary() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname.startsWith("/api/nginx/")) {
       const action = serviceAction(url.pathname.split("/").at(-1));
       await sendJson(response, await runNginx(action));
@@ -77,8 +165,23 @@ const server = http.createServer(async (request, response) => {
 
       if (actionName === "port") {
         const body = await readJson(request);
-        await setMysqlPort(Number(body.port));
+        const port = body.port === "auto" ? await findAvailableMysqlPort() : Number(body.port);
+        await setMysqlPort(port);
+        await writePhpMyAdminConfig();
         await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+        return;
+      }
+
+      if (actionName === "version") {
+        const body = await readJson(request);
+        await setMysqlVersion(assertString(body.version, "version"));
+        await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+        return;
+      }
+
+      if (actionName === "init") {
+        const status = await initializeMysqlDataDir();
+        await sendJson(response, { ok: true, status, summary: await getDashboardSummary() });
         return;
       }
 
@@ -90,8 +193,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (actionName === "shell") {
-        const command = await mysqlShellCommand();
-        spawn(command.command, command.args, { stdio: "inherit", shell: false });
+        await openMysqlShell();
         await sendJson(response, { ok: true });
         return;
       }
@@ -102,7 +204,102 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      if (actionName === "password") {
+        await sendJson(response, { password: await getMysqlRootPassword() });
+        return;
+      }
+
+      if (actionName === "reset-password") {
+        await sendJson(response, { password: await resetMysqlRootPassword(), summary: await getDashboardSummary() });
+        return;
+      }
+
+      if (actionName === "change-password") {
+        const body = await readJson(request);
+        await sendJson(response, { password: await changeMysqlRootPassword(assertString(body.password, "password")), summary: await getDashboardSummary() });
+        return;
+      }
+
       await sendJson(response, await runMysql(serviceAction(actionName)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/phpmyadmin/install") {
+      const status = await installPhpMyAdmin();
+      await writeNginxConfigs();
+      await syncHostsFile();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, status, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/api/redis/")) {
+      const actionName = url.pathname.split("/").at(-1);
+
+      if (actionName === "port") {
+        const body = await readJson(request);
+        const port = body.port === "auto" ? await findAvailableRedisPort() : Number(body.port);
+        await setRedisPort(port);
+        await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+        return;
+      }
+
+      if (actionName === "shell") {
+        const command = await redisCliCommand();
+        spawn(command.command, command.args, { stdio: "inherit", shell: false, windowsHide: true });
+        await sendJson(response, { ok: true });
+        return;
+      }
+
+      await sendJson(response, await runRedis(serviceAction(actionName)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/api/mongodb/")) {
+      const actionName = url.pathname.split("/").at(-1);
+
+      if (actionName === "port") {
+        const body = await readJson(request);
+        const port = body.port === "auto" ? await findAvailableMongoDbPort() : Number(body.port);
+        await setMongoDbPort(port);
+        await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+        return;
+      }
+
+      await sendJson(response, await runMongoDb(serviceAction(actionName)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/runtimes/jobs") {
+      await sendJson(response, { jobs: listRuntimeInstallJobs() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/runtimes/jobs/")) {
+      const jobId = decodeURIComponent(url.pathname.slice("/api/runtimes/jobs/".length));
+      const job = getRuntimeInstallJob(jobId);
+      if (!job) {
+        response.writeHead(404, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "Runtime install job not found." }));
+        return;
+      }
+      await sendJson(response, { job });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/runtimes/install") {
+      const body = await readJson(request);
+      const job = startRuntimeInstallJob(assertRuntimeKind(body.kind), typeof body.version === "string" ? body.version : undefined, { force: body.force === true });
+      await sendJson(response, { ok: true, jobId: job.id, job });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/runtimes/uninstall") {
+      const body = await readJson(request);
+      const status = await uninstallRuntime(assertRuntimeKind(body.kind), typeof body.version === "string" ? body.version : undefined);
+      await sendJson(response, { ok: true, status, summary: await getDashboardSummary() });
       return;
     }
 
@@ -110,7 +307,21 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       await secureSite(assertString(body.site, "site"));
       await writeNginxConfigs();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/ssl/status") {
+      await sendJson(response, await getLocalCaStatus());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/ssl/trust") {
+      const status = await trustLocalCa({ wait: false });
+      await sendJson(response, { ok: true, status, summary: await getDashboardSummary() });
       return;
     }
 
@@ -118,8 +329,17 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       await unsecureSite(assertString(body.site, "site"));
       await writeNginxConfigs();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
       return;
+    }
+
+    if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) {
+      if (await serveBuiltUi(request, response, url)) {
+        return;
+      }
     }
 
     response.writeHead(404, { "Content-Type": "application/json" });
@@ -130,6 +350,31 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
+function corsOrigin(origin: string | undefined): string {
+  if (!origin) {
+    return "http://127.0.0.1:5173";
+  }
+
+  if (origin === "null" || origin.startsWith("tauri://")) {
+    return origin;
+  }
+
+  try {
+    const url = new URL(origin);
+    if (
+      url.hostname === "tauri.localhost" ||
+      (url.hostname === "127.0.0.1" && (url.port === "5173" || url.port === String(port))) ||
+      (url.hostname === "localhost" && (url.port === "5173" || url.port === String(port)))
+    ) {
+      return origin;
+    }
+  } catch {
+    // Keep the development origin fallback below.
+  }
+
+  return "http://127.0.0.1:5173";
+}
+
 server.listen(port, host, () => {
   console.log(`laraboxs helper API listening on http://${host}:${port}`);
 });
@@ -137,6 +382,81 @@ server.listen(port, host, () => {
 async function sendJson(response: http.ServerResponse, value: unknown): Promise<void> {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(value, null, 2));
+}
+
+async function serveBuiltUi(request: http.IncomingMessage, response: http.ServerResponse, url: URL): Promise<boolean> {
+  const filePath = await builtUiFilePath(url.pathname);
+  if (!filePath) {
+    return false;
+  }
+
+  const body = request.method === "HEAD" ? undefined : await readFile(filePath);
+  response.writeHead(200, {
+    "Content-Type": contentTypeFor(filePath),
+    "Cache-Control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable"
+  });
+  response.end(body);
+  return true;
+}
+
+async function builtUiFilePath(urlPath: string): Promise<string | undefined> {
+  const requestedPath = safeUiPath(urlPath);
+  if (!requestedPath) {
+    return undefined;
+  }
+
+  const directPath = path.join(builtUiRoot, requestedPath);
+  if (await isFile(directPath)) {
+    return directPath;
+  }
+
+  const indexPath = path.join(builtUiRoot, "index.html");
+  return (await isFile(indexPath)) ? indexPath : undefined;
+}
+
+function safeUiPath(urlPath: string): string | undefined {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return undefined;
+  }
+
+  const normalized = path.normalize(decoded.replace(/^\/+/, "") || "index.html");
+  if (normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
+async function isFile(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function contentTypeFor(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "text/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".ico":
+      return "image/x-icon";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function readJson(request: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -158,9 +478,65 @@ function assertString(value: unknown, name: string): string {
   return value;
 }
 
+function assertPhpSettings(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("PHP settings are required.");
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    memoryLimit: optionalString(input.memoryLimit),
+    uploadMaxFilesize: optionalString(input.uploadMaxFilesize),
+    postMaxSize: optionalString(input.postMaxSize),
+    maxExecutionTime: optionalNumber(input.maxExecutionTime),
+    maxInputVars: optionalNumber(input.maxInputVars),
+    enabledExtensions: optionalStringArray(input.enabledExtensions)
+  };
+}
+
+function assertNginxSettings(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Nginx settings are required.");
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    httpPort: requiredPort(input.httpPort, "HTTP port"),
+    httpsPort: requiredPort(input.httpsPort, "HTTPS port"),
+    fastCgiHost: assertString(input.fastCgiHost, "FastCGI host")
+  };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function requiredPort(value: unknown, name: string): number {
+  const port = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isInteger(port)) {
+    throw new Error(`${name} is required.`);
+  }
+  return port;
+}
+
+function optionalStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+}
+
 function serviceAction(value: string | undefined): ServiceAction {
   if (value === "start" || value === "stop" || value === "restart") {
     return value;
   }
   throw new Error(`Unsupported service action: ${value ?? ""}`);
+}
+
+function assertRuntimeKind(value: unknown): RuntimeKind {
+  if (value === "php" || value === "mysql" || value === "nginx" || value === "redis" || value === "mongodb" || value === "node" || value === "composer") {
+    return value;
+  }
+  throw new Error(`Unsupported runtime: ${String(value)}`);
 }

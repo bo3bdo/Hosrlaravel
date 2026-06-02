@@ -2,17 +2,19 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { loadConfig } from "./config.js";
+import { loadConfig, updateConfig } from "./config.js";
 import { appendLog } from "./logging.js";
 import { getPaths, toNginxPath } from "./paths.js";
-import { phpFastCgiPort } from "./php.js";
+import { ensurePhpFastCgiWorkers, phpFastCgiPort } from "./php.js";
+import { generatePhpMyAdminNginxConfig } from "./phpmyadmin.js";
 import { discoverSites } from "./sites.js";
-import type { CommandSpec, ServiceAction, ServiceStatus, Site } from "./types.js";
+import type { CommandSpec, NginxConfig, ServiceAction, ServiceStatus, Site } from "./types.js";
 
 export function generateNginxMainConfig(): string {
   const paths = getPaths();
   return [
     "worker_processes  1;",
+    `pid "${toNginxPath(path.join(paths.logs, "nginx.pid"))}";`,
     "",
     "events {",
     "    worker_connections  1024;",
@@ -85,7 +87,9 @@ export async function generateNginxSiteConfig(site: Site): Promise<string> {
 export async function writeNginxConfigs(): Promise<void> {
   const paths = getPaths();
   const sites = await discoverSites();
+  await mkdir(path.dirname(paths.nginxConfig), { recursive: true });
   await mkdir(paths.nginxSites, { recursive: true });
+  await mkdir(paths.logs, { recursive: true });
 
   for (const entry of await readdir(paths.nginxSites, { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith(".conf")) {
@@ -102,12 +106,41 @@ export async function writeNginxConfigs(): Promise<void> {
     })
   );
 
-  await appendLog("nginx", `wrote ${sites.length} site config(s)`);
+  const phpMyAdminConfig = await generatePhpMyAdminNginxConfig();
+  if (phpMyAdminConfig) {
+    await writeFile(path.join(paths.nginxSites, "phpmyadmin.test.conf"), `${phpMyAdminConfig}\n`, "utf8");
+  }
+
+  await appendLog("nginx", `wrote ${sites.length + (phpMyAdminConfig ? 1 : 0)} site config(s)`);
+}
+
+export async function updateNginxSettings(settings: Partial<NginxConfig>): Promise<NginxConfig> {
+  const next: Partial<NginxConfig> = {};
+
+  if (settings.httpPort !== undefined) {
+    next.httpPort = validatePort(settings.httpPort, "HTTP port");
+  }
+  if (settings.httpsPort !== undefined) {
+    next.httpsPort = validatePort(settings.httpsPort, "HTTPS port");
+  }
+  if (settings.fastCgiHost !== undefined) {
+    next.fastCgiHost = validateFastCgiHost(settings.fastCgiHost);
+  }
+
+  const config = await updateConfig((current) => {
+    const merged = { ...current.nginx, ...next };
+    if (merged.httpPort === merged.httpsPort) {
+      throw new Error("HTTP and HTTPS ports must be different.");
+    }
+    current.nginx = merged;
+  });
+
+  await appendLog("nginx", `updated settings: http=${config.nginx.httpPort}, https=${config.nginx.httpsPort}, fastcgi=${config.nginx.fastCgiHost}`);
+  return config.nginx;
 }
 
 export function nginxBinaryPath(): string {
-  const bundled = path.join(getPaths().nginxRoot, "nginx.exe");
-  return existsSync(bundled) ? bundled : "nginx";
+  return path.join(getPaths().nginxRoot, "nginx.exe");
 }
 
 export function buildNginxCommand(action: ServiceAction): CommandSpec {
@@ -115,11 +148,11 @@ export function buildNginxCommand(action: ServiceAction): CommandSpec {
   const baseArgs = ["-p", paths.nginxRoot, "-c", paths.nginxConfig];
 
   if (action === "stop") {
-    return { command: nginxBinaryPath(), args: ["-p", paths.nginxRoot, "-s", "stop"] };
+    return { command: nginxBinaryPath(), args: [...baseArgs, "-s", "stop"] };
   }
 
   if (action === "restart") {
-    return { command: nginxBinaryPath(), args: ["-p", paths.nginxRoot, "-s", "reload"] };
+    return { command: nginxBinaryPath(), args: [...baseArgs, "-s", "reload"] };
   }
 
   return { command: nginxBinaryPath(), args: baseArgs };
@@ -129,17 +162,22 @@ export async function runNginx(action: ServiceAction): Promise<ServiceStatus> {
   await writeNginxConfigs();
   const command = buildNginxCommand(action);
 
-  if (command.command === "nginx" && process.platform === "win32" && !existsSync(path.join(getPaths().nginxRoot, "nginx.exe"))) {
-    const message = `Nginx binary not found. Place nginx.exe at ${path.join(getPaths().nginxRoot, "nginx.exe")} or add nginx to PATH.`;
+  if (!existsSync(nginxBinaryPath())) {
+    const message = `Nginx is not installed. Install it from Setup or the Nginx page.`;
     await appendLog("nginx", message);
     return { name: "nginx", state: "unknown", logPath: path.join(getPaths().logs, "nginx-error.log"), message };
+  }
+
+  if (action === "start" || action === "restart") {
+    await ensurePhpFastCgiWorkers();
   }
 
   const child = spawn(command.command, command.args, {
     cwd: getPaths().nginxRoot,
     detached: true,
     stdio: "ignore",
-    shell: false
+    shell: false,
+    windowsHide: true
   });
   child.once("error", (error) => {
     void appendLog("nginx", `${action} failed: ${error.message}`);
@@ -158,4 +196,19 @@ export function getNginxStatus(message?: string): ServiceStatus {
     logPath: path.join(getPaths().logs, "nginx-error.log"),
     message
   };
+}
+
+function validatePort(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${label} must be a port between 1 and 65535.`);
+  }
+  return value;
+}
+
+function validateFastCgiHost(value: string): string {
+  const host = value.trim();
+  if (!host || /[\s;/"']/.test(host)) {
+    throw new Error("FastCGI host must be a host name or IP address.");
+  }
+  return host;
 }

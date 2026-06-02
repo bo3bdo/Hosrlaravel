@@ -11,7 +11,7 @@ export async function saveSecret(key: string, value: string): Promise<void> {
   const secretPath = secretFile(key);
   await mkdir(path.dirname(secretPath), { recursive: true });
 
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && process.env.LARABOXS_SECRET_FALLBACK !== "1") {
     try {
       await execFileAsync(
         "powershell.exe",
@@ -31,7 +31,10 @@ export async function saveSecret(key: string, value: string): Promise<void> {
           }
         }
       );
-      return;
+      const written = await readFile(secretPath, "utf8");
+      if (written.trim()) {
+        return;
+      }
     } catch {
       // Fall through to the portable development fallback.
     }
@@ -52,25 +55,30 @@ export async function readSecret(key: string): Promise<string | undefined> {
   }
 
   if (process.platform === "win32") {
-    const { stdout } = await execFileAsync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "$encrypted = Get-Content -LiteralPath $env:LARABOXS_SECRET_PATH -Raw; " +
-          "$secure = ConvertTo-SecureString -String $encrypted.Trim(); " +
-          "$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure); " +
-          "try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }"
-      ],
-      {
-        env: {
-          ...process.env,
-          LARABOXS_SECRET_PATH: secretPath
+    try {
+      const { stdout } = await execFileAsync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$encrypted = Get-Content -LiteralPath $env:LARABOXS_SECRET_PATH -Raw; " +
+            "if (-not $encrypted.Trim()) { exit 2 }; " +
+            "$secure = ConvertTo-SecureString -String $encrypted.Trim(); " +
+            "$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure); " +
+            "try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) } }"
+        ],
+        {
+          env: {
+            ...process.env,
+            LARABOXS_SECRET_PATH: secretPath
+          }
         }
-      }
-    );
-    return stdout.trimEnd();
+      );
+      return stdout.trimEnd();
+    } catch {
+      return undefined;
+    }
   }
 
   return undefined;

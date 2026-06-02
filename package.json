@@ -1,5 +1,5 @@
 {
-  "name": "laraboxs-windows-mvp",
+  "name": "laraboxs-windows",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,12 +11,19 @@
     "build": "tsc -p tsconfig.node.json && vite build",
     "cli": "tsx src/cli/index.ts",
     "dev": "vite --host 127.0.0.1",
+    "helper:install": "powershell -ExecutionPolicy Bypass -File scripts/install-helper-service.ps1",
+    "helper:status": "powershell -ExecutionPolicy Bypass -File scripts/helper-service-status.ps1",
+    "helper:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-helper-service.ps1",
+    "package:preview": "powershell -ExecutionPolicy Bypass -File scripts/package-preview.ps1",
+    "package:tauri-resources": "powershell -ExecutionPolicy Bypass -File scripts/prepare-tauri-resources.ps1",
+    "start": "node dist/api/server.js",
     "tauri": "tauri",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
+    "extract-zip": "^2.0.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

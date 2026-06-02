@@ -28,7 +28,9 @@ export function hostsFilePath(): string {
 export function getPaths(): LaraboxsPaths {
   const home = laraboxsHome();
   const nginxRoot = path.join(home, "services", "nginx");
-  const mysqlRoot = path.join(home, "services", "mysql", "8.4");
+  const mysqlRoot = mysqlRootForVersion("8.4");
+  const redisRoot = redisRootForVersion("8.8");
+  const mongodbRoot = mongodbRootForVersion("8.2");
 
   return {
     home,
@@ -38,11 +40,39 @@ export function getPaths(): LaraboxsPaths {
     nginxConfig: path.join(nginxRoot, "conf", "nginx.conf"),
     nginxSites: path.join(nginxRoot, "conf", "sites-enabled"),
     mysqlRoot,
-    mysqlData: path.join(mysqlRoot, "data"),
+    mysqlData: mysqlDataForVersion("8.4"),
+    redisRoot,
+    redisData: redisDataForVersion("8.8"),
+    mongodbRoot,
+    mongodbData: mongodbDataForVersion("8.2"),
     phpRoot: path.join(home, "runtimes", "php"),
     certs: path.join(home, "certs"),
     hostsFile: hostsFilePath()
   };
+}
+
+export function mysqlRootForVersion(version: string): string {
+  return path.join(laraboxsHome(), "services", "mysql", version);
+}
+
+export function mysqlDataForVersion(version: string): string {
+  return path.join(mysqlRootForVersion(version), "data");
+}
+
+export function redisRootForVersion(version: string): string {
+  return path.join(laraboxsHome(), "services", "redis", version);
+}
+
+export function redisDataForVersion(version: string): string {
+  return path.join(redisRootForVersion(version), "data");
+}
+
+export function mongodbRootForVersion(version: string): string {
+  return path.join(laraboxsHome(), "services", "mongodb", version);
+}
+
+export function mongodbDataForVersion(version: string): string {
+  return path.join(mongodbRootForVersion(version), "data", "db");
 }
 
 export async function ensureBaseDirs(): Promise<LaraboxsPaths> {
@@ -53,6 +83,8 @@ export async function ensureBaseDirs(): Promise<LaraboxsPaths> {
     mkdir(path.dirname(paths.nginxConfig), { recursive: true }),
     mkdir(paths.nginxSites, { recursive: true }),
     mkdir(paths.mysqlData, { recursive: true }),
+    mkdir(paths.redisData, { recursive: true }),
+    mkdir(paths.mongodbData, { recursive: true }),
     mkdir(paths.phpRoot, { recursive: true }),
     mkdir(paths.certs, { recursive: true })
   ]);

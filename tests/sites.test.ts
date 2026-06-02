@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { addParkedFolder, discoverSites, isolateSite, setGlobalPhpVersion } from "../src/core/sites.js";
+import { addParkedFolder, discoverSites, isolateSite, setGlobalPhpVersion, setSiteEntryPath } from "../src/core/sites.js";
 
 describe("site discovery", () => {
   let tempHome: string;
@@ -39,5 +39,17 @@ describe("site discovery", () => {
     const sites = await discoverSites();
     expect(sites.find((site) => site.domain === "laravel-app.test")?.phpVersion).toBe("8.4");
     expect(sites.find((site) => site.domain === "plain-php.test")?.phpVersion).toBe("8.5");
+  });
+
+  it("supports editable Nginx entry paths inside a site folder", async () => {
+    await mkdir(path.join(parked, "plain-php", "web"), { recursive: true });
+    await addParkedFolder(parked);
+    await setSiteEntryPath("plain-php.test", "web");
+
+    const sites = await discoverSites();
+    const site = sites.find((candidate) => candidate.domain === "plain-php.test");
+
+    expect(site?.entryPath).toBe("web");
+    expect(site?.documentRoot.endsWith(path.join("plain-php", "web"))).toBe(true);
   });
 });

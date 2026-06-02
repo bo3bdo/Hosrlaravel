@@ -5,5 +5,8 @@ dist-ui/
 .env
 .env.local
 coverage/
+artifacts/
+src-tauri/resources/
+src-tauri/target/
 *.log
 *.tsbuildinfo
