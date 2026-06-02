@@ -97,7 +97,7 @@ export async function buildRedisCommand(action: ServiceAction): Promise<CommandS
   await ensureRedisConfigured();
   return {
     command: redisBinaryPath("redis-server", config.redis.version),
-    args: [paths.config],
+    args: [path.basename(paths.config)],
     cwd: paths.root
   };
 }

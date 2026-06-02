@@ -568,18 +568,18 @@ Usage:
   laraboxs logs
   laraboxs runtimes
   laraboxs install [--force] php <8.4|8.5>
-  laraboxs install [--force] mysql <8.4|8.0>
+  laraboxs install [--force] mysql <9.7|8.4|8.0>
   laraboxs install nginx
   laraboxs install redis
   laraboxs install mongodb
   laraboxs install node
   laraboxs install composer
   laraboxs uninstall php <8.4|8.5>
-  laraboxs uninstall mysql <8.4|8.0>
+  laraboxs uninstall mysql <9.7|8.4|8.0>
   laraboxs uninstall nginx|redis|mongodb|node|composer
   laraboxs mysql:start|mysql:stop|mysql:restart|mysql:status
   laraboxs mysql:init
-  laraboxs mysql:use <8.4|8.0>
+  laraboxs mysql:use <9.7|8.4|8.0>
   laraboxs mysql:port <port|--auto>
   laraboxs mysql:logs
   laraboxs mysql:create-db <database_name>

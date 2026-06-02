@@ -23,6 +23,7 @@ describe("redis command logic", () => {
     const command = await buildRedisCommand("start");
 
     expect(command.command).toBe(redisBinaryPath("redis-server", "8.8"));
-    expect(command.args[0]).toContain(path.join("services", "redis", "8.8", "redis.conf"));
+    expect(command.args[0]).toBe("redis.conf");
+    expect(command.cwd).toContain(path.join("services", "redis", "8.8"));
   });
 });

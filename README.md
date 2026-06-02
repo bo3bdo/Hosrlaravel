@@ -10,11 +10,11 @@ laraboxs is an original Windows-first local development environment manager for 
 - Hosts file block generation and syncing.
 - Nginx main and per-site config generation, including editable per-site entry/document-root paths.
 - PHP global version selection, per-site isolation, FastCGI workers, generated `php.ini`, and Laravel-friendly extension/settings controls.
-- MySQL `my.ini`, local-only binding, side-by-side 8.4/8.0 runtime support, per-version data directories, data-dir initialization command, status probing, generated root password storage, password reset/change, port selection, database creation command, and Laravel `.env` output.
+- MySQL `my.ini`, local-only binding, side-by-side 9.7/8.4/8.0 runtime support, per-version data directories, data-dir initialization command, status probing, generated root password storage, password reset/change, port selection, database creation command, and Laravel `.env` output.
 - MongoDB app-local runtime install, localhost-only config, data directory, log, port selection, and start/stop/restart controls.
 - Redis runtime install and app-local start/stop/restart controls.
 - App-local phpMyAdmin install exposed at `phpmyadmin.test`.
-- First-run Setup dashboard for installing PHP 8.4/8.5, MySQL 8.4/8.0, MongoDB, Nginx, Redis, Node.js, and Composer into laraboxs app data.
+- First-run desktop setup for choosing a sites folder and automatically installing PHP 8.5, MySQL 9.7, Nginx, Composer, Node.js, and phpMyAdmin into laraboxs app data.
 - Local helper API for the React dashboard.
 - React dashboard for Sites, Nginx, PHP, MySQL, MongoDB, Redis, phpMyAdmin, Logs, Settings, and inline per-site SSL toggles.
 - Local SSL CA generation, CA-signed per-site certificates, SSL trust status, and an explicit Windows trust command/prompt.
@@ -43,7 +43,7 @@ npm start
 
 Open [http://127.0.0.1:47899](http://127.0.0.1:47899).
 
-Use the Setup page first to install PHP, MySQL, MongoDB, Nginx, Redis, Node.js, and Composer runtimes.
+On first launch, choose a sites folder and laraboxs installs the default PHP, MySQL, Nginx, Composer, and Node.js stack automatically.
 
 For the CLI:
 
@@ -54,7 +54,7 @@ npm run cli -- mysql:status
 npm run cli -- site:entry my-app.test public
 npm run cli -- mysql:init
 npm run cli -- mysql:env app_name
-npm run cli -- mysql:use 8.0
+npm run cli -- mysql:use 9.7
 npm run cli -- mysql:password
 npm run cli -- mongodb:status
 npm run cli -- php-fcgi:status
@@ -64,7 +64,7 @@ npm run cli -- ssl:trust
 npm run cli -- redis:status
 npm run cli -- phpmyadmin:status
 npm run cli -- install php 8.4
-npm run cli -- install mysql 8.4
+npm run cli -- install mysql 9.7
 npm run cli -- install mongodb
 npm run cli -- install redis
 npm run cli -- install node

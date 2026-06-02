@@ -36,6 +36,7 @@ export interface PhpConfig {
 
 export interface LaraboxsConfig {
   version: 1;
+  setupComplete: boolean;
   tld: string;
   parkedFolders: string[];
   globalPhpVersion: string;

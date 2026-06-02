@@ -1,16 +1,22 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { getNginxStatus } from "./nginx.js";
+import { getPhpFastCgiStatus, runPhpFastCgi } from "./php.js";
 import { appendLog } from "./logging.js";
 import { getPaths, mongodbRootForVersion, mysqlRootForVersion, redisRootForVersion } from "./paths.js";
 import { downloadFile, downloadsDir, extractZip, mergeSingleExtractedFolder, runtimeStatus } from "./runtimeInstaller.js";
 import type { RuntimeInstallProgress, RuntimeInstallStatus, RuntimeKind, RuntimeManifestEntry } from "./types.js";
 
 const mysqlVersions = [
+  {
+    version: "9.7",
+    packageVersion: "9.7.0",
+    downloadPath: "MySQL-9.7"
+  },
   {
     version: "8.4",
     packageVersion: "8.4.9",
@@ -27,7 +33,7 @@ const redisVersion = "8.8";
 const redisPackageVersion = "8.8.0";
 const mongodbVersion = "8.2";
 const mongodbPackageVersion = "8.2.0";
-const nodeVersion = "22.22.3";
+const nodeVersion = "24.16.0";
 const runtimeMarkerFile = ".laraboxs-runtime.json";
 
 interface RuntimeInstallMarker {
@@ -51,7 +57,7 @@ export function runtimeManifest(): RuntimeManifestEntry[] {
       name: "PHP",
       version: "8.4",
       packageVersion: "8.4.21",
-      downloadUrl: "https://windows.php.net/downloads/releases/php-8.4.21-nts-Win32-vs17-x64.zip",
+      downloadUrl: "https://downloads.php.net/~windows/releases/latest/php-8.4-nts-Win32-vs17-x64-latest.zip",
       archiveType: "zip",
       root: path.join(paths.phpRoot, "8.4"),
       binary: path.join(paths.phpRoot, "8.4", "php.exe")
@@ -61,7 +67,7 @@ export function runtimeManifest(): RuntimeManifestEntry[] {
       name: "PHP",
       version: "8.5",
       packageVersion: "8.5.6",
-      downloadUrl: "https://windows.php.net/downloads/releases/php-8.5.6-nts-Win32-vs17-x64.zip",
+      downloadUrl: "https://downloads.php.net/~windows/releases/latest/php-8.5-nts-Win32-vs17-x64-latest.zip",
       archiveType: "zip",
       root: path.join(paths.phpRoot, "8.5"),
       binary: path.join(paths.phpRoot, "8.5", "php.exe")
@@ -112,7 +118,7 @@ export function runtimeManifest(): RuntimeManifestEntry[] {
     {
       kind: "node",
       name: "Node.js",
-      version: "22",
+      version: "24",
       packageVersion: nodeVersion,
       downloadUrl: `https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-win-x64.zip`,
       archiveType: "zip",
@@ -123,6 +129,7 @@ export function runtimeManifest(): RuntimeManifestEntry[] {
       kind: "composer",
       name: "Composer",
       version: "stable",
+      packageVersion: "2.10.0",
       downloadUrl: "https://getcomposer.org/composer-stable.phar",
       archiveType: "file",
       root: composerRoot,
@@ -145,7 +152,7 @@ export function getRuntimeStatus(): {
   const nginx = statusFor(requiredEntry(entries, "nginx"));
   const redis = statusFor(requiredEntry(entries, "redis"));
   const mongodb = statusFor(requiredEntry(entries, "mongodb"));
-  const php = entries.filter((entry) => entry.kind === "php").map(statusFor);
+  const php = phpRuntimeStatuses(entries);
   const node = statusFor(requiredEntry(entries, "node"));
   const composer = statusFor(requiredEntry(entries, "composer"));
 
@@ -190,6 +197,10 @@ export async function installRuntime(kind: RuntimeKind, version?: string, option
 
   if (entry.kind === "mongodb" && options.force && (await isActiveMongoDbRuntime(entry)) && (await isMongoDbReachable())) {
     throw new Error("Stop MongoDB before updating the installed runtime.");
+  }
+
+  if (entry.kind === "php" && options.force && (await getPhpFastCgiStatus()).state !== "stopped") {
+    await runPhpFastCgi("stop");
   }
 
   report({
@@ -276,6 +287,10 @@ export async function uninstallRuntime(kind: RuntimeKind, version?: string): Pro
     throw new Error("Stop MongoDB before removing the installed runtime.");
   }
 
+  if (entry.kind === "php" && (await getPhpFastCgiStatus()).state !== "stopped") {
+    await runPhpFastCgi("stop");
+  }
+
   assertAppLocalRuntimeRoot(entry.root);
   await rm(entry.root, { recursive: true, force: true });
   await rm(runtimeDownloadPath(entry), { force: true });
@@ -312,6 +327,57 @@ function statusFor(entry: RuntimeManifestEntry): RuntimeInstallStatus {
     installedPackageVersion: marker?.packageVersion,
     installedAt: marker?.installedAt,
     updateAvailable: status.installed && marker ? runtimeNeedsUpdate(entry, marker) : false
+  };
+}
+
+function phpRuntimeStatuses(entries: RuntimeManifestEntry[]): RuntimeInstallStatus[] {
+  const manifestPhp = entries.filter((entry) => entry.kind === "php");
+  const byVersion = new Map<string, RuntimeInstallStatus>();
+
+  for (const entry of manifestPhp) {
+    byVersion.set(entry.version, statusFor(entry));
+  }
+
+  for (const entry of discoverInstalledPhpRuntimeEntries(manifestPhp)) {
+    if (!byVersion.has(entry.version)) {
+      byVersion.set(entry.version, statusForDiscoveredPhpRuntime(entry));
+    }
+  }
+
+  return Array.from(byVersion.values()).sort((left, right) => compareRuntimeVersions(left.version, right.version));
+}
+
+function discoverInstalledPhpRuntimeEntries(knownEntries: RuntimeManifestEntry[]): RuntimeManifestEntry[] {
+  const paths = getPaths();
+  const knownRoots = new Set(knownEntries.map((entry) => path.resolve(entry.root).toLowerCase()));
+
+  try {
+    return readdirSync(paths.phpRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => {
+        const root = path.join(paths.phpRoot, entry.name);
+        return {
+          kind: "php" as const,
+          name: "PHP",
+          version: entry.name,
+          downloadUrl: "",
+          archiveType: "zip" as const,
+          root,
+          binary: path.join(root, "php.exe")
+        };
+      })
+      .filter((entry) => !knownRoots.has(path.resolve(entry.root).toLowerCase()) && existsSync(entry.binary));
+  } catch {
+    return [];
+  }
+}
+
+function statusForDiscoveredPhpRuntime(entry: RuntimeManifestEntry): RuntimeInstallStatus {
+  const status = runtimeStatus(entry.name, entry.version, entry.root, entry.binary);
+  return {
+    ...status,
+    installedPackageVersion: status.installed ? detectInstalledPackageVersion(entry) : undefined,
+    updateAvailable: false
   };
 }
 
@@ -497,6 +563,10 @@ function compareDottedVersions(left: string, right: string): number | undefined 
     }
   }
   return 0;
+}
+
+function compareRuntimeVersions(left: string, right: string): number {
+  return compareDottedVersions(left, right) ?? left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
 }
 
 function numericVersionParts(version: string): number[] | undefined {

@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { addParkedFolder, isolateSite, resetSiteEntryPath, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
+import { updateConfig } from "../core/config.js";
+import { addParkedFolder, isolateSite, resetSiteEntryPath, setConfiguredPhpVersions, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
 import { syncHostsFile } from "../core/hosts.js";
 import {
   findAvailableMysqlPort,
@@ -49,6 +50,23 @@ const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
 
+    if (request.method === "GET" && url.pathname === "/api/health") {
+      await sendJson(response, {
+        ok: true,
+        name: "laraboxs-helper",
+        pid: process.pid,
+        projectRoot,
+        builtUiRoot
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/health.txt") {
+      response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end(["laraboxs-helper", projectRoot, String(process.pid)].join("\n"));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/summary") {
       await sendJson(response, await getDashboardSummary());
       return;
@@ -59,11 +77,26 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/setup/complete") {
+      await updateConfig((config) => {
+        config.setupComplete = true;
+      });
+      await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/sites/park") {
       const body = await readJson(request);
       await addParkedFolder(assertString(body.path, "path"));
       await writeNginxConfigs();
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/open-url") {
+      const body = await readJson(request);
+      openExternalUrl(assertHttpUrl(body.url));
+      await sendJson(response, { ok: true });
       return;
     }
 
@@ -103,7 +136,26 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/php/use") {
       const body = await readJson(request);
+      const phpWasRunning = (await getPhpFastCgiStatus()).state !== "stopped";
       await setGlobalPhpVersion(assertString(body.version, "version"));
+      await writeNginxConfigs();
+      if (phpWasRunning) {
+        await runPhpFastCgi("restart");
+      }
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/php/versions") {
+      const body = await readJson(request);
+      const versions = optionalStringArray(body.versions);
+      if (!versions) {
+        throw new Error("PHP versions are required.");
+      }
+      await setConfiguredPhpVersions(versions, typeof body.globalVersion === "string" ? body.globalVersion : undefined);
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
       return;
     }
@@ -476,6 +528,40 @@ function assertString(value: unknown, name: string): string {
     throw new Error(`${name} is required.`);
   }
   return value;
+}
+
+function assertHttpUrl(value: unknown): string {
+  const raw = assertString(value, "url");
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("URL is invalid.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http and https URLs can be opened.");
+  }
+
+  return parsed.toString();
+}
+
+function openExternalUrl(url: string): void {
+  const command =
+    process.platform === "win32"
+      ? { file: "cmd.exe", args: ["/d", "/c", "start", "", url] }
+      : process.platform === "darwin"
+        ? { file: "open", args: [url] }
+        : { file: "xdg-open", args: [url] };
+
+  const child = spawn(command.file, command.args, {
+    detached: true,
+    stdio: "ignore",
+    shell: false,
+    windowsHide: true
+  });
+  child.once("error", () => undefined);
+  child.unref();
 }
 
 function assertPhpSettings(value: unknown) {

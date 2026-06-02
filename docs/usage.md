@@ -13,7 +13,7 @@ laraboxs park C:\www --dry-run-hosts
 laraboxs sites
 laraboxs site:entry my-app.test public
 laraboxs site:entry:reset my-app.test
-laraboxs use 8.4
+laraboxs use 8.5
 laraboxs isolate 8.5 my-app.test
 laraboxs secure my-app.test
 laraboxs ssl:status
@@ -21,7 +21,7 @@ laraboxs ssl:trust
 laraboxs start
 laraboxs mysql:status
 laraboxs mysql:init
-laraboxs mysql:use 8.0
+laraboxs mysql:use 9.7
 laraboxs mysql:port --auto
 laraboxs mysql:create-db app_name
 laraboxs mysql:env app_name
@@ -61,7 +61,7 @@ npm start
 
 Open `http://127.0.0.1:47899`.
 
-Use the Setup section first. It installs selected PHP versions, MySQL versions, MongoDB, Nginx, Redis, Node.js, and Composer into `%USERPROFILE%\.config\laraboxs` so users do not need to install runtimes manually.
+On first launch, choose a sites folder. laraboxs parks it and installs the default PHP, MySQL, Nginx, Composer, and Node.js stack into `%USERPROFILE%\.config\laraboxs`.
 
 The Sites section includes a Nginx Entry panel for each site. Laravel projects default to `public`; PHP/static projects default to `.`. Set a relative entry such as `public`, `web`, or `dist`, then save to regenerate per-site Nginx configs. The CLI equivalent is `laraboxs site:entry <site> <entry>`, or `laraboxs site:entry <entry>` from inside a parked site.
 
@@ -70,6 +70,7 @@ CLI equivalents:
 ```powershell
 laraboxs install php 8.4
 laraboxs install php 8.5
+laraboxs install mysql 9.7
 laraboxs install mysql 8.4
 laraboxs install mysql 8.0
 laraboxs install mongodb
@@ -89,7 +90,8 @@ phpMyAdmin installs into laraboxs app data and is served through Nginx at `http:
 laraboxs can download runtimes into app data and starts services when the matching binaries are present:
 
 - Nginx: `%USERPROFILE%\.config\laraboxs\services\nginx\nginx.exe`
-- PHP: `%USERPROFILE%\.config\laraboxs\runtimes\php\8.4\php.exe`
+- PHP: `%USERPROFILE%\.config\laraboxs\runtimes\php\8.5\php.exe`
+- MySQL 9.7: `%USERPROFILE%\.config\laraboxs\services\mysql\9.7\bin\mysqld.exe`
 - MySQL 8.4: `%USERPROFILE%\.config\laraboxs\services\mysql\8.4\bin\mysqld.exe`
 - MySQL 8.0: `%USERPROFILE%\.config\laraboxs\services\mysql\8.0\bin\mysqld.exe`
 - MongoDB: `%USERPROFILE%\.config\laraboxs\services\mongodb\8.2\bin\mongod.exe`

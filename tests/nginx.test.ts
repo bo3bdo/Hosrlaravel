@@ -24,7 +24,7 @@ describe("nginx config generation", () => {
 
     expect(config).toContain("listen 127.0.0.1:80;");
     expect(config).toContain('/my-app/public"');
-    expect(config).toContain("fastcgi_pass 127.0.0.1:9084;");
+    expect(config).toContain("fastcgi_pass 127.0.0.1:9085;");
   });
 
   it("writes the pid file to laraboxs logs", () => {
@@ -51,7 +51,7 @@ describe("nginx config generation", () => {
 
     expect(config).toContain("listen 127.0.0.1:8080;");
     expect(config).toContain("listen 127.0.0.1:8443 ssl;");
-    expect(config).toContain("fastcgi_pass 127.0.0.2:9084;");
+    expect(config).toContain("fastcgi_pass 127.0.0.2:9085;");
   });
 
   it("uses editable per-site Nginx entry paths", async () => {

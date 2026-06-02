@@ -3,7 +3,7 @@
 use std::{
     env,
     fs::{create_dir_all, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     net::{SocketAddr, TcpStream},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -135,11 +135,6 @@ fn quit_app(app_handle: &tauri::AppHandle) {
 }
 
 fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std::error::Error>> {
-    if helper_api_ready() {
-        log_helper_api("helper API is already listening");
-        return Ok(None);
-    }
-
     let Some(resource_dir) = helper_resource_dir(resource_dir) else {
         log_helper_api("helper API resources were not found");
         return Ok(None);
@@ -148,6 +143,23 @@ fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std:
     let app_dir = normalize_windows_path(resource_dir.join("app"));
     let node = normalize_windows_path(resource_dir.join("node.exe"));
     let server = app_dir.join("dist").join("api").join("server.js");
+
+    if helper_api_owned_by(&app_dir) {
+        log_helper_api("helper API for this installation is already listening");
+        return Ok(None);
+    }
+
+    if helper_api_ready() {
+        log_helper_api("helper API port is busy; trying to stop stale laraboxs helper");
+        stop_stale_helper_api();
+        wait_for_helper_api_to_stop();
+    }
+
+    if helper_api_ready() {
+        log_helper_api("helper API port is still busy after stale helper cleanup");
+        return Ok(None);
+    }
+
     let stderr = helper_log_file("helper.err.log").map(Stdio::from).unwrap_or_else(|_| Stdio::null());
     let stdout = helper_log_file("helper.out.log").map(Stdio::from).unwrap_or_else(|_| Stdio::null());
 
@@ -167,6 +179,7 @@ fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std:
         .current_dir(app_dir)
         .env("LARABOXS_API_PORT", API_PORT.to_string())
         .env("NODE_ENV", "production")
+        .env("LARABOXS_HELPER_APP_DIR", resource_dir.join("app"))
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
@@ -241,6 +254,77 @@ fn helper_api_ready() -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], API_PORT));
     TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
 }
+
+fn helper_api_owned_by(app_dir: &PathBuf) -> bool {
+    let Some(body) = helper_api_health_body() else {
+        return false;
+    };
+
+    normalize_for_compare(&body).contains(&normalize_for_compare(&app_dir.display().to_string()))
+}
+
+fn helper_api_health_body() -> Option<String> {
+    let address = SocketAddr::from(([127, 0, 0, 1], API_PORT));
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(300)).ok()?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let request = format!(
+        "GET /api/health.txt HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        API_PORT
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+        return None;
+    }
+
+    response.split("\r\n\r\n").nth(1).map(|body| body.to_string())
+}
+
+fn wait_for_helper_api_to_stop() {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if !helper_api_ready() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn normalize_for_compare(value: &str) -> String {
+    value
+        .replace("\\\\?\\UNC\\", "\\\\")
+        .replace("\\\\?\\", "")
+        .replace('/', "\\")
+        .to_lowercase()
+}
+
+#[cfg(windows)]
+fn stop_stale_helper_api() {
+    let script = format!(
+        "$port = {port}; \
+         $connections = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue; \
+         foreach ($connection in $connections) {{ \
+           $processId = $connection.OwningProcess; \
+           $process = Get-CimInstance Win32_Process -Filter \"ProcessId = $processId\" -ErrorAction SilentlyContinue; \
+           $line = (($process.ExecutablePath, $process.CommandLine) -join ' '); \
+           if ($line -match 'laraboxs') {{ Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue }} \
+         }}",
+        port = API_PORT
+    );
+
+    let _ = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(windows))]
+fn stop_stale_helper_api() {}
 
 fn stop_helper_api(app_handle: &tauri::AppHandle) {
     let child = {

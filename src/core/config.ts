@@ -53,9 +53,10 @@ const defaultPhpExtensions = [
 export function defaultConfig(): LaraboxsConfig {
   return {
     version: 1,
+    setupComplete: false,
     tld: "test",
     parkedFolders: [],
-    globalPhpVersion: "8.4",
+    globalPhpVersion: "8.5",
     phpVersions: ["8.4", "8.5"],
     isolatedPhp: {},
     siteEntryPaths: {},
@@ -74,7 +75,7 @@ export function defaultConfig(): LaraboxsConfig {
       fastCgiHost: "127.0.0.1"
     },
     mysql: {
-      version: "8.4",
+      version: "9.7",
       port: 3306,
       rootUser: "root",
       instanceName: "default"
@@ -130,6 +131,7 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
 
   return {
     version: 1,
+    setupComplete: input.setupComplete ?? defaults.setupComplete,
     tld: input.tld ?? defaults.tld,
     parkedFolders,
     globalPhpVersion: input.globalPhpVersion ?? defaults.globalPhpVersion,

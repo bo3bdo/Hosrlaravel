@@ -14,6 +14,7 @@ describe("runtime manifest", () => {
 
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("php:8.4");
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("php:8.5");
+    expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("mysql:9.7");
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("mysql:8.4");
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("mysql:8.0");
     expect(manifest.map((entry) => entry.kind)).toContain("nginx");
@@ -26,9 +27,9 @@ describe("runtime manifest", () => {
   it("reports runtime installation status from laraboxs app data", () => {
     const status = getRuntimeStatus();
 
-    expect(status.mysql).toHaveLength(2);
-    expect(status.mysql.find((entry) => entry.version === "8.4")?.installed).toBe(false);
-    expect(status.mysql.find((entry) => entry.version === "8.4")?.binary).toContain(path.join("services", "mysql", "8.4", "bin", "mysqld.exe"));
+    expect(status.mysql).toHaveLength(3);
+    expect(status.mysql.find((entry) => entry.version === "9.7")?.installed).toBe(false);
+    expect(status.mysql.find((entry) => entry.version === "9.7")?.binary).toContain(path.join("services", "mysql", "9.7", "bin", "mysqld.exe"));
     expect(status.nginx.installed).toBe(false);
     expect(status.nginx.binary).toContain(path.join("services", "nginx", "nginx.exe"));
     expect(status.redis.installed).toBe(false);
@@ -37,6 +38,19 @@ describe("runtime manifest", () => {
     expect(status.mongodb.binary).toContain(path.join("services", "mongodb", "8.2", "bin", "mongod.exe"));
     expect(status.php).toHaveLength(2);
     expect(status.composer.binary.endsWith("composer.phar")).toBe(true);
+  });
+
+  it("discovers installed PHP versions that are not in the install manifest", async () => {
+    const phpBinary = path.join(process.env.LARABOXS_HOME!, "runtimes", "php", "8.3", "php.exe");
+    await mkdir(path.dirname(phpBinary), { recursive: true });
+    await writeFile(phpBinary, "fake php", "utf8");
+
+    const status = getRuntimeStatus();
+    const discovered = status.php.find((entry) => entry.version === "8.3");
+
+    expect(discovered?.installed).toBe(true);
+    expect(discovered?.downloadUrl).toBeUndefined();
+    expect(discovered?.updateAvailable).toBe(false);
   });
 
   it("removes an installed app-local runtime", async () => {

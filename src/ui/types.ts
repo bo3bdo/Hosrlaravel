@@ -2,6 +2,7 @@ export type Framework = "Laravel" | "PHP" | "Static";
 export type ServiceState = "running" | "stopped" | "unknown";
 
 export interface LaraboxsConfig {
+  setupComplete: boolean;
   tld: string;
   parkedFolders: string[];
   globalPhpVersion: string;

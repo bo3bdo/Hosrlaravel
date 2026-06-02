@@ -22,6 +22,30 @@ export async function setGlobalPhpVersion(version: string): Promise<LaraboxsConf
   });
 }
 
+export async function setConfiguredPhpVersions(versions: string[], globalVersion?: string): Promise<LaraboxsConfig> {
+  const selectedVersions = Array.from(new Set(versions.map((version) => version.trim()).filter(Boolean))).sort();
+  if (!selectedVersions.length) {
+    throw new Error("At least one PHP version is required.");
+  }
+
+  const activeVersion = globalVersion?.trim() || selectedVersions[0];
+  if (!selectedVersions.includes(activeVersion)) {
+    throw new Error("The global PHP version must be one of the configured PHP versions.");
+  }
+
+  return updateConfig((config) => {
+    selectedVersions.forEach((version) => ensureKnownPhpVersion(config, version));
+    config.phpVersions = selectedVersions;
+    config.globalPhpVersion = activeVersion;
+
+    for (const [domain, version] of Object.entries(config.isolatedPhp)) {
+      if (!selectedVersions.includes(version)) {
+        delete config.isolatedPhp[domain];
+      }
+    }
+  });
+}
+
 export async function isolateSite(identifier: string, version: string): Promise<LaraboxsConfig> {
   const site = await findSite(identifier);
   return updateConfig((config) => {

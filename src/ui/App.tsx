@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleStop,
   Database,
   Download,
@@ -11,8 +14,10 @@ import {
   Globe,
   KeyRound,
   ListRestart,
+  LoaderCircle,
   Lock,
   LockOpen,
+  PackageCheck,
   Play,
   RotateCw,
   Server,
@@ -23,17 +28,23 @@ import {
 } from "lucide-react";
 import type { DashboardSummary, PhpConfig, PhpExtensionStatus, PhpSettingsStatus, RuntimeInstallJob, RuntimeInstallStatus, RuntimeKind, ServiceStatus, Site } from "./types.js";
 
-type Section = "setup" | "sites" | "nginx" | "php" | "mysql" | "mongodb" | "redis" | "logs" | "settings";
+type Section = "sites" | "services" | "logs" | "settings";
+type ServicesPane = "mysql" | "redis" | "mongodb" | "phpmyadmin" | "php" | "nginx" | "all";
 type RuntimeJobMap = Record<string, RuntimeInstallJob>;
+type WizardStepId = "folder" | "install" | "finish";
+type WizardTaskStatus = "pending" | "running" | "complete" | "failed";
+type WizardTaskState = { status: WizardTaskStatus; message?: string };
+type WizardTaskDefinition = {
+  id: string;
+  label: string;
+  detail: string;
+  optional?: boolean;
+  runtime?: { kind: RuntimeKind; version?: string };
+};
 
 const sections: Array<{ id: Section; label: string; icon: typeof Globe }> = [
-  { id: "setup", label: "Setup", icon: Download },
   { id: "sites", label: "Sites", icon: Globe },
-  { id: "nginx", label: "Nginx", icon: Server },
-  { id: "php", label: "PHP", icon: SquareTerminal },
-  { id: "mysql", label: "MySQL", icon: Database },
-  { id: "mongodb", label: "MongoDB", icon: Database },
-  { id: "redis", label: "Redis", icon: Database },
+  { id: "services", label: "Services", icon: Server },
   { id: "logs", label: "Logs", icon: FileText },
   { id: "settings", label: "Settings", icon: Settings }
 ];
@@ -55,9 +66,26 @@ function apiUrl(path: string): string {
   return `http://127.0.0.1:47899${normalizedPath}`;
 }
 
+async function openExternalUrl(url: string): Promise<void> {
+  try {
+    const response = await fetch(apiUrl("/api/open-url"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+    if (response.ok) {
+      return;
+    }
+  } catch {
+    // Fall back below for older helpers that do not expose /api/open-url yet.
+  }
+
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 export default function App() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [section, setSection] = useState<Section>("setup");
+  const [section, setSection] = useState<Section>("sites");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installJobs, setInstallJobs] = useState<RuntimeJobMap>({});
@@ -77,7 +105,7 @@ export default function App() {
     await request(path, body);
   }
 
-  async function startRuntimeInstall(kind: RuntimeKind, version?: string, force = false) {
+  async function startRuntimeInstall(kind: RuntimeKind, version?: string, force = false): Promise<RuntimeInstallJob | undefined> {
     try {
       const response = await fetch(apiUrl("/api/runtimes/install"), {
         method: "POST",
@@ -88,8 +116,10 @@ export default function App() {
       const payload = (await response.json()) as { job: RuntimeInstallJob };
       setInstallJobs((current) => ({ ...current, [payload.job.id]: payload.job }));
       setError(null);
+      return payload.job;
     } catch (requestError) {
       setError(`Action failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+      return undefined;
     }
   }
 
@@ -176,6 +206,28 @@ export default function App() {
 
   const active = useMemo(() => sections.find((item) => item.id === section)!, [section]);
 
+  if (!summary) {
+    return <BootScreen error={error} busy={busy} refresh={refresh} />;
+  }
+
+  if (summary && needsFirstRunSetup(summary)) {
+    return (
+      <FirstRunWizard
+        summary={summary}
+        installJobs={installJobs}
+        startRuntimeInstall={startRuntimeInstall}
+        request={request}
+        refresh={refresh}
+        busy={busy}
+        error={error}
+        onFinish={() => {
+          setSection("sites");
+          void refresh();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -218,27 +270,1083 @@ export default function App() {
         ) : (
           <section className="content">
             {section === "sites" ? <Sites summary={summary} post={post} request={request} busy={busy} /> : null}
-            {section === "setup" ? (
-              <Setup summary={summary} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} removeRuntime={removeRuntime} busy={busy} />
-            ) : null}
-            {section === "nginx" ? (
-              <Nginx summary={summary} post={post} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
-            ) : null}
-            {section === "php" ? <Php summary={summary} post={post} busy={busy} /> : null}
-            {section === "mysql" ? (
-              <Mysql summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
-            ) : null}
-            {section === "mongodb" ? (
-              <MongoDB summary={summary} post={post} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
-            ) : null}
-            {section === "redis" ? (
-              <Redis summary={summary} post={post} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
+            {section === "services" ? (
+              <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
             ) : null}
             {section === "logs" ? <Logs summary={summary} /> : null}
             {section === "settings" ? <SettingsView summary={summary} /> : null}
           </section>
         )}
       </main>
+    </div>
+  );
+}
+
+function BootScreen({ error, busy, refresh }: { error: string | null; busy: boolean; refresh: () => Promise<void> }) {
+  return (
+    <div className="boot-shell">
+      <div className="boot-panel">
+        <div className="brand">
+          <div className="brand-mark">L</div>
+          <div>
+            <strong>laraboxs</strong>
+            <span>Windows local dev</span>
+          </div>
+        </div>
+        <div className="boot-status">
+          <LoaderCircle className="spin" size={22} />
+          <div>
+            <strong>Loading local stack state</strong>
+            <span>{error ?? "Checking runtimes and services..."}</span>
+          </div>
+        </div>
+        <button onClick={() => void refresh()} disabled={busy}>
+          <RotateCw size={18} />
+          <span>Retry</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FirstRunWizard({
+  summary,
+  installJobs,
+  startRuntimeInstall,
+  request,
+  refresh,
+  busy,
+  error,
+  onFinish
+}: {
+  summary: DashboardSummary;
+  installJobs: RuntimeJobMap;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  refresh: () => Promise<void>;
+  busy: boolean;
+  error: string | null;
+  onFinish: () => void;
+}) {
+  const [step, setStep] = useState<WizardStepId>("folder");
+  const [sitesFolder, setSitesFolder] = useState(summary.config.parkedFolders[0] ?? defaultSitesFolder(summary));
+  const [taskStates, setTaskStates] = useState<Record<string, WizardTaskState>>({});
+  const [running, setRunning] = useState(false);
+  const [wizardError, setWizardError] = useState<string | null>(null);
+  const [wizardWarning, setWizardWarning] = useState<string | null>(null);
+
+  const phpRuntime = preferredRuntime(summary.runtimes.php);
+  const mysqlRuntime = preferredRuntime(summary.runtimes.mysql);
+  const phpVersion = phpRuntime?.version ?? summary.config.globalPhpVersion;
+  const mysqlVersion = mysqlRuntime?.version ?? summary.config.mysql.version;
+  const canStart = sitesFolder.trim().length > 0;
+  const steps: Array<{ id: WizardStepId; label: string; detail: string }> = [
+    { id: "folder", label: "Sites", detail: pathTail(sitesFolder) || "Choose folder" },
+    { id: "install", label: "Stack", detail: running ? "Installing" : `${taskDefinitionsLabel(summary, phpVersion, mysqlVersion)}` },
+    { id: "finish", label: "Ready", detail: "Open workspace" }
+  ];
+  const activeStepIndex = steps.findIndex((item) => item.id === step);
+  const taskDefinitions = useMemo(
+    () =>
+      firstRunTaskDefinitions(summary, {
+        phpVersion,
+        mysqlVersion,
+        sitesFolder: sitesFolder.trim()
+      }),
+    [summary, phpVersion, mysqlVersion, sitesFolder]
+  );
+  const resolvedCount = taskDefinitions.filter((task) => {
+    const status = taskStates[task.id]?.status;
+    return status === "complete" || (task.optional && status === "failed");
+  }).length;
+  const setupFinished = taskDefinitions.length > 0 && resolvedCount === taskDefinitions.length;
+  const setupPercent = taskDefinitions.length ? Math.round((resolvedCount / taskDefinitions.length) * 100) : 0;
+
+  function updateTask(id: string, status: WizardTaskStatus, message?: string) {
+    setTaskStates((current) => ({
+      ...current,
+      [id]: { status, message }
+    }));
+  }
+
+  async function runSetup() {
+    if (!canStart) {
+      setWizardError("Choose a sites folder before setup.");
+      setStep("folder");
+      return;
+    }
+
+    setStep("install");
+    setRunning(true);
+    setWizardError(null);
+    setWizardWarning(null);
+
+    try {
+      setTaskStates({});
+      const optionalFailures: string[] = [];
+      for (const task of taskDefinitions) {
+        try {
+          if (task.runtime) {
+            await runRuntimeWizardTask(task, summary, startRuntimeInstall, refresh, updateTask);
+          } else {
+            await runActionWizardTask(task, async () => {
+              switch (task.id) {
+                case "park":
+                  await request("/api/sites/park", { path: sitesFolder.trim() });
+                  break;
+                case "configure":
+                  await request("/api/php-fcgi/stop").catch(() => undefined);
+                  await request("/api/php/versions", { versions: [phpVersion], globalVersion: phpVersion });
+                  if (mysqlVersion !== summary.config.mysql.version) {
+                    await request("/api/mysql/stop").catch(() => undefined);
+                    await request("/api/mysql/version", { version: mysqlVersion });
+                  }
+                  break;
+                case "mysql-init":
+                  await request("/api/mysql/init");
+                  break;
+                case "phpmyadmin":
+                  await request("/api/phpmyadmin/install");
+                  break;
+                case "php-start":
+                  await request("/api/php-fcgi/start");
+                  break;
+                case "mysql-start":
+                  await request("/api/mysql/start");
+                  break;
+                case "redis-start":
+                  await request("/api/redis/start");
+                  break;
+                case "mongodb-start":
+                  await request("/api/mongodb/start");
+                  break;
+                case "nginx-start":
+                  await request("/api/nginx/start");
+                  break;
+                case "hosts-sync":
+                  await request("/api/hosts/sync");
+                  break;
+                case "complete":
+                  await request("/api/setup/complete");
+                  break;
+              }
+              await refresh();
+            }, updateTask);
+          }
+        } catch (taskError) {
+          if (!task.optional) {
+            throw taskError;
+          }
+          optionalFailures.push(task.label);
+        }
+      }
+      if (optionalFailures.length) {
+        setWizardWarning(`${optionalFailures.join(", ")} can be configured later from their pages.`);
+      }
+      setStep("finish");
+    } catch (setupError) {
+      setWizardError(setupError instanceof Error ? setupError.message : String(setupError));
+    } finally {
+      setRunning(false);
+      await refresh();
+    }
+  }
+
+  async function browseFolder() {
+    const payload = (await request("/api/dialog/folder", { initialPath: sitesFolder })) as { path?: string | null };
+    if (payload.path) {
+      setSitesFolder(payload.path);
+    }
+  }
+
+  return (
+    <div className="wizard-shell">
+      <aside className="wizard-rail">
+        <div className="brand">
+          <div className="brand-mark">L</div>
+          <div>
+            <strong>laraboxs</strong>
+            <span>First launch</span>
+          </div>
+        </div>
+        <div className="wizard-step-list">
+          {steps.map((item, index) => (
+            <button
+              key={item.id}
+              className={["wizard-step", step === item.id ? "active" : "", index < activeStepIndex ? "done" : ""].filter(Boolean).join(" ")}
+              disabled={running || (item.id === "finish" && !setupFinished)}
+              onClick={() => setStep(item.id)}
+            >
+              <span>{index < activeStepIndex || (item.id === "finish" && setupFinished) ? <CheckCircle2 size={15} /> : index + 1}</span>
+              <div>
+                <strong>{item.label}</strong>
+                <small>{item.detail}</small>
+              </div>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      <main className="wizard-main">
+        <header className="wizard-titlebar">
+          <div>
+            <span className="eyebrow">Local stack</span>
+            <h1>{step === "finish" ? "laraboxs is ready" : "Set up laraboxs"}</h1>
+          </div>
+          <button className="icon-button" onClick={() => void refresh()} disabled={busy || running} title="Refresh">
+            <RotateCw size={18} />
+            <span>Refresh</span>
+          </button>
+        </header>
+
+        {error || wizardError || wizardWarning ? <div className="notice wizard-notice">{wizardError ?? error ?? wizardWarning}</div> : null}
+
+        <section className="wizard-content">
+          {step === "folder" ? (
+            <div className="wizard-page wizard-folder-page">
+              <div className="wizard-copy">
+                <span className="eyebrow">Sites folder</span>
+                <h2>Choose where local projects live.</h2>
+                <p>laraboxs will park this folder and create it if it does not exist.</p>
+              </div>
+              <div className="wizard-folder-card">
+                <label>
+                  <span>Sites folder</span>
+                  <div className="path-picker">
+                    <input value={sitesFolder} onChange={(event) => setSitesFolder(event.target.value)} />
+                    <button type="button" className="field-icon-button" disabled={busy || running} onClick={() => void browseFolder()} title="Browse folder">
+                      <FolderOpen size={18} />
+                    </button>
+                  </div>
+                </label>
+                <div className="button-row">
+                  <button disabled={busy || running} onClick={() => setSitesFolder(defaultSitesFolder(summary))}>
+                    <RotateCw size={18} />
+                    <span>Use Default</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="wizard-stack-preview">
+                <StackPreviewItem icon={SquareTerminal} title={`PHP ${phpVersion}`} runtime={phpRuntime} />
+                <StackPreviewItem icon={Database} title={`MySQL ${mysqlVersion}`} runtime={mysqlRuntime} />
+                <StackPreviewItem icon={Server} title={`Nginx ${summary.runtimes.nginx.version}`} runtime={summary.runtimes.nginx} />
+                <StackPreviewItem icon={PackageCheck} title="Composer stable" runtime={summary.runtimes.composer} />
+                <StackPreviewItem icon={SquareTerminal} title={`Node.js ${summary.runtimes.node.version}`} runtime={summary.runtimes.node} />
+              </div>
+            </div>
+          ) : null}
+
+          {step === "install" ? (
+            <div className="wizard-page">
+              <div className="wizard-install-header">
+                <div className="wizard-copy">
+                  <span className="eyebrow">Installing</span>
+                  <h2>Downloading and starting the local stack.</h2>
+                </div>
+                <div className="wizard-progress-summary">
+                  <strong>{setupPercent}%</strong>
+                  <span>
+                    {resolvedCount}/{taskDefinitions.length} complete
+                  </span>
+                </div>
+              </div>
+              <div className="progress-track wizard-overall-progress">
+                <div className="progress-fill" style={{ width: `${setupPercent}%` }} />
+              </div>
+              <div className="wizard-task-list">
+                {taskDefinitions.map((task) => (
+                  <WizardTaskRow key={task.id} task={task} state={taskStates[task.id]} installJobs={installJobs} />
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {step === "finish" ? (
+            <div className="wizard-page wizard-finish">
+              <CheckCircle2 size={46} />
+              <div>
+                <span className="eyebrow">Complete</span>
+                <h2>The local development stack is ready.</h2>
+                <p>{pathTail(sitesFolder) || "Sites"} is parked with PHP {phpVersion}, Nginx, MySQL {mysqlVersion}, Composer, and Node.js.</p>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <footer className="wizard-footer">
+          <button disabled={running || step === "folder"} onClick={() => setStep(steps[Math.max(0, activeStepIndex - 1)].id)}>
+            <ChevronLeft size={18} />
+            <span>Back</span>
+          </button>
+          {step === "folder" ? (
+            <button className="primary" disabled={running || busy || !canStart} onClick={() => void runSetup()}>
+              <Download size={18} />
+              <span>Continue</span>
+            </button>
+          ) : null}
+          {step === "install" ? (
+            <button className="primary" disabled={running || busy || setupFinished} onClick={() => void runSetup()}>
+              {running ? <LoaderCircle className="spin" size={18} /> : <PackageCheck size={18} />}
+              <span>{running ? "Preparing" : wizardError ? "Retry Setup" : setupFinished ? "Complete" : "Start Setup"}</span>
+            </button>
+          ) : null}
+          {step === "finish" ? (
+            <button className="primary" disabled={!setupFinished && !summary.config.setupComplete} onClick={onFinish}>
+              <CheckCircle2 size={18} />
+              <span>Open laraboxs</span>
+            </button>
+          ) : null}
+        </footer>
+      </main>
+    </div>
+  );
+}
+
+function StackPreviewItem({ icon: Icon, title, runtime }: { icon: typeof Globe; title: string; runtime?: RuntimeInstallStatus }) {
+  const ready = Boolean(runtime?.installed && !runtime.updateAvailable);
+  return (
+    <div className="stack-preview-item">
+      <Icon size={19} />
+      <div>
+        <strong>{title}</strong>
+        <span>{ready ? runtimeDisplayVersion(runtime!) : runtime?.installed ? "Update during setup" : "Download during setup"}</span>
+      </div>
+      <Badge label={ready ? "ready" : runtime?.installed ? "update" : "latest"} tone={ready ? "green" : "amber"} />
+    </div>
+  );
+}
+
+function WizardToggle({
+  checked,
+  disabled = false,
+  title,
+  detail,
+  status,
+  onChange
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  title: string;
+  detail: string;
+  status: "ready" | "missing";
+  onChange?: (checked: boolean) => void;
+}) {
+  return (
+    <label className={`wizard-toggle ${disabled ? "disabled" : ""}`}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange?.(event.target.checked)} />
+      <span>
+        <strong>{title}</strong>
+        <small>{detail}</small>
+      </span>
+      <Badge label={status} tone={status === "ready" ? "green" : "amber"} />
+    </label>
+  );
+}
+
+function WizardTaskRow({ task, state, installJobs }: { task: WizardTaskDefinition; state?: WizardTaskState; installJobs: RuntimeJobMap }) {
+  const status = state?.status ?? "pending";
+  const runtimeJob = task.runtime ? latestRuntimeJob(Object.values(installJobs), task.runtime.kind, task.runtime.version ?? "") : undefined;
+  const showRuntimeProgress = runtimeJob ? isActiveRuntimeJob(runtimeJob) || runtimeJob.status === "failed" : false;
+
+  return (
+    <div className={`wizard-task ${status}`}>
+      <div className="wizard-task-icon">
+        {status === "complete" ? <CheckCircle2 size={18} /> : status === "running" ? <LoaderCircle className="spin" size={18} /> : status === "failed" ? <CircleStop size={18} /> : <PackageCheck size={18} />}
+      </div>
+      <div className="wizard-task-main">
+        <div className="wizard-task-title">
+          <strong>{task.label}</strong>
+          <span>{state?.message ?? task.detail}</span>
+        </div>
+        {showRuntimeProgress && runtimeJob ? <RuntimeProgress job={runtimeJob} /> : null}
+      </div>
+    </div>
+  );
+}
+
+async function runActionWizardTask(task: WizardTaskDefinition, action: () => Promise<void>, updateTask: (id: string, status: WizardTaskStatus, message?: string) => void) {
+  updateTask(task.id, "running", task.detail);
+  try {
+    await action();
+    updateTask(task.id, "complete", "Complete");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    updateTask(task.id, "failed", message);
+    throw error;
+  }
+}
+
+async function runRuntimeWizardTask(
+  task: WizardTaskDefinition,
+  summary: DashboardSummary,
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>,
+  refresh: () => Promise<void>,
+  updateTask: (id: string, status: WizardTaskStatus, message?: string) => void
+) {
+  const runtime = task.runtime ? selectedRuntimeStatus(summary, task.runtime.kind, task.runtime.version) : undefined;
+  if (runtime?.installed && !runtime.updateAvailable) {
+    updateTask(task.id, "complete", "Already installed");
+    return;
+  }
+
+  updateTask(task.id, "running", runtime?.updateAvailable ? "Updating runtime" : "Starting download");
+  const job = task.runtime ? await startRuntimeInstall(task.runtime.kind, task.runtime.version, Boolean(runtime?.updateAvailable)) : undefined;
+  if (!job) {
+    const message = `Could not start ${task.label}.`;
+    updateTask(task.id, "failed", message);
+    throw new Error(message);
+  }
+
+  const finishedJob = await waitForRuntimeJob(job, (currentJob) => {
+    updateTask(task.id, "running", currentJob.message ?? statusLabel(currentJob.status));
+  });
+
+  if (finishedJob.status === "failed") {
+    const message = finishedJob.error ?? finishedJob.message ?? `${task.label} failed.`;
+    updateTask(task.id, "failed", message);
+    throw new Error(message);
+  }
+
+  updateTask(task.id, "complete", "Installed");
+  await refresh();
+}
+
+async function waitForRuntimeJob(job: RuntimeInstallJob, onUpdate: (job: RuntimeInstallJob) => void): Promise<RuntimeInstallJob> {
+  let currentJob = job;
+  onUpdate(currentJob);
+
+  while (isActiveRuntimeJob(currentJob)) {
+    await sleep(900);
+    currentJob = await fetchRuntimeInstallJob(currentJob.id);
+    onUpdate(currentJob);
+  }
+
+  return currentJob;
+}
+
+function firstRunTaskDefinitions(
+  summary: DashboardSummary,
+  options: {
+    phpVersion: string;
+    mysqlVersion: string;
+    sitesFolder: string;
+  }
+): WizardTaskDefinition[] {
+  const tasks: WizardTaskDefinition[] = [
+    { id: "park", label: "Park sites folder", detail: options.sitesFolder },
+    { id: "configure", label: "Apply selected versions", detail: `Use PHP ${options.phpVersion} and MySQL ${options.mysqlVersion}` },
+    { id: `php-${options.phpVersion}`, label: `Prepare PHP ${options.phpVersion}`, detail: "Download PHP CLI and FastCGI", runtime: { kind: "php", version: options.phpVersion } },
+    { id: "nginx", label: "Prepare Nginx", detail: "Download the local web server", runtime: { kind: "nginx", version: summary.runtimes.nginx.version } },
+    { id: `mysql-${options.mysqlVersion}`, label: `Prepare MySQL ${options.mysqlVersion}`, detail: "Download the database runtime", runtime: { kind: "mysql", version: options.mysqlVersion } },
+    { id: "composer", label: "Prepare Composer", detail: "Install Composer for Laravel packages", runtime: { kind: "composer", version: summary.runtimes.composer.version } },
+    { id: "node", label: "Prepare Node.js", detail: "Install frontend tooling runtime", runtime: { kind: "node", version: summary.runtimes.node.version } }
+  ];
+
+  tasks.push({ id: "mysql-init", label: "Initialize MySQL", detail: "Create data directory and root password" });
+  if (!summary.phpMyAdmin.installed) {
+    tasks.push({ id: "phpmyadmin", label: "Install phpMyAdmin", detail: "Create the database admin site", optional: true });
+  }
+  tasks.push(
+    { id: "php-start", label: "Start PHP FastCGI", detail: "Launch the selected PHP worker" },
+    { id: "mysql-start", label: "Start MySQL", detail: "Start the local database service" }
+  );
+  tasks.push(
+    { id: "nginx-start", label: "Start Nginx", detail: "Serve local sites" },
+    { id: "hosts-sync", label: "Sync local domains", detail: "Update the Windows hosts file", optional: true },
+    { id: "complete", label: "Save setup state", detail: "Open the workspace" }
+  );
+
+  return tasks;
+}
+
+function needsFirstRunSetup(summary: DashboardSummary): boolean {
+  if (!summary.config.setupComplete) {
+    return true;
+  }
+
+  return summary.config.parkedFolders.length === 0 || !baseStackInstalled(summary);
+}
+
+function baseStackInstalled(summary: DashboardSummary): boolean {
+  return Boolean(
+    selectedPhpRuntime(summary, summary.config.globalPhpVersion)?.installed &&
+      selectedMysqlRuntime(summary, summary.config.mysql.version)?.installed &&
+      summary.runtimes.nginx.installed &&
+      summary.runtimes.composer.installed
+  );
+}
+
+function selectedRuntimeStatus(summary: DashboardSummary, kind: RuntimeKind, version?: string): RuntimeInstallStatus | undefined {
+  switch (kind) {
+    case "php":
+      return selectedPhpRuntime(summary, version ?? summary.config.globalPhpVersion);
+    case "mysql":
+      return selectedMysqlRuntime(summary, version ?? summary.config.mysql.version);
+    case "nginx":
+      return summary.runtimes.nginx;
+    case "redis":
+      return summary.runtimes.redis;
+    case "mongodb":
+      return summary.runtimes.mongodb;
+    case "node":
+      return summary.runtimes.node;
+    case "composer":
+      return summary.runtimes.composer;
+  }
+}
+
+function selectedPhpRuntime(summary: DashboardSummary, version: string): RuntimeInstallStatus | undefined {
+  return summary.runtimes.php.find((runtime) => runtime.version === version) ?? summary.runtimes.php[0];
+}
+
+function selectedMysqlRuntime(summary: DashboardSummary, version: string): RuntimeInstallStatus | undefined {
+  return summary.runtimes.mysql.find((runtime) => runtime.version === version) ?? summary.runtimes.mysql[0];
+}
+
+function preferredRuntime(items: RuntimeInstallStatus[]): RuntimeInstallStatus | undefined {
+  return [...items].sort((left, right) => compareVersionStrings(right.version, left.version))[0];
+}
+
+function compareVersionStrings(left: string, right: string): number {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return left.localeCompare(right);
+}
+
+function versionParts(version: string): number[] {
+  return version.match(/\d+/g)?.map((part) => Number(part)) ?? [];
+}
+
+function defaultSitesFolder(summary: DashboardSummary): string {
+  const match = summary.paths.home.match(/^(.*)[\\/]\.config[\\/]laraboxs$/i);
+  return `${match?.[1] ?? summary.paths.home}\\Sites`;
+}
+
+function pathTail(folder: string): string {
+  const trimmed = folder.trim().replace(/[\\/]+$/g, "");
+  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+}
+
+function taskDefinitionsLabel(summary: DashboardSummary, phpVersion: string, mysqlVersion: string): string {
+  const count = firstRunTaskDefinitions(summary, { phpVersion, mysqlVersion, sitesFolder: "" }).length;
+  return `${count} automatic tasks`;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function Services({
+  summary,
+  post,
+  request,
+  installJobs,
+  startRuntimeInstall,
+  busy
+}: ViewProps & {
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  installJobs: RuntimeJobMap;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
+}) {
+  const [phpVersion, setPhpVersion] = useState(summary.config.globalPhpVersion);
+  const [mysqlVersion, setMysqlVersion] = useState(summary.config.mysql.version);
+  const [mysqlPort, setMysqlPort] = useState(String(summary.config.mysql.port));
+  const [redisPort, setRedisPort] = useState(String(summary.config.redis.port));
+  const [mongodbPort, setMongoDbPort] = useState(String(summary.config.mongodb.port));
+  const [servicesPane, setServicesPane] = useState<ServicesPane>("mysql");
+  const [databaseName, setDatabaseName] = useState("app_name");
+  const [envText, setEnvText] = useState("");
+  const [rootPassword, setRootPassword] = useState("");
+  const [showRootPassword, setShowRootPassword] = useState(false);
+  const [newRootPassword, setNewRootPassword] = useState("");
+  const jobs = Object.values(installJobs);
+  const phpRuntime = summary.runtimes.php.find((runtime) => runtime.version === phpVersion) ?? summary.runtimes.php[0];
+  const mysqlRuntime = summary.runtimes.mysql.find((runtime) => runtime.version === mysqlVersion) ?? summary.runtimes.mysql[0];
+  const phpJob = phpRuntime ? latestRuntimeJob(jobs, "php", phpRuntime.version) : undefined;
+  const mysqlJob = mysqlRuntime ? latestRuntimeJob(jobs, "mysql", mysqlRuntime.version) : undefined;
+  const nginxJob = latestRuntimeJob(jobs, "nginx", summary.runtimes.nginx.version);
+  const redisJob = latestRuntimeJob(jobs, "redis", summary.runtimes.redis.version);
+  const mongodbJob = latestRuntimeJob(jobs, "mongodb", summary.runtimes.mongodb.version);
+  const phpVersionsKey = summary.runtimes.php.map((runtime) => runtime.version).join("|");
+  const mysqlVersionsKey = summary.runtimes.mysql.map((runtime) => runtime.version).join("|");
+  const runningServices = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis, summary.services.mongodb].filter(
+    (service) => service.state === "running"
+  ).length;
+  const showPhp = servicesPane === "php" || servicesPane === "all";
+  const showNginx = servicesPane === "nginx" || servicesPane === "all";
+  const showMysql = servicesPane === "mysql" || servicesPane === "all";
+  const showRedis = servicesPane === "redis" || servicesPane === "all";
+  const showMongoDb = servicesPane === "mongodb" || servicesPane === "all";
+  const showPhpMyAdmin = servicesPane === "phpmyadmin" || servicesPane === "all";
+
+  useEffect(() => {
+    setMysqlPort(String(summary.config.mysql.port));
+    setRedisPort(String(summary.config.redis.port));
+    setMongoDbPort(String(summary.config.mongodb.port));
+  }, [summary.config.mysql.port, summary.config.redis.port, summary.config.mongodb.port]);
+
+  useEffect(() => {
+    if (summary.runtimes.php.length && !summary.runtimes.php.some((runtime) => runtime.version === phpVersion)) {
+      setPhpVersion(summary.config.globalPhpVersion);
+    }
+  }, [phpVersion, phpVersionsKey, summary.config.globalPhpVersion, summary.runtimes.php]);
+
+  useEffect(() => {
+    if (summary.runtimes.mysql.length && !summary.runtimes.mysql.some((runtime) => runtime.version === mysqlVersion)) {
+      setMysqlVersion(summary.config.mysql.version);
+    }
+  }, [mysqlVersion, mysqlVersionsKey, summary.config.mysql.version, summary.runtimes.mysql]);
+
+  async function useMysqlVersion() {
+    if (summary.services.mysql.state === "running") {
+      await post("/api/mysql/stop");
+    }
+    await post("/api/mysql/version", { version: mysqlVersion });
+  }
+
+  async function loadEnv() {
+    const payload = (await request("/api/mysql/env", { name: databaseName })) as { env?: string };
+    setEnvText(payload.env ?? "");
+  }
+
+  async function loadRootPassword() {
+    const payload = (await request("/api/mysql/password")) as { password?: string };
+    setRootPassword(payload.password ?? "");
+    setShowRootPassword(true);
+  }
+
+  async function resetRootPassword() {
+    if (!window.confirm("Reset MySQL root password?")) {
+      return;
+    }
+    const payload = (await request("/api/mysql/reset-password")) as { password?: string };
+    setRootPassword(payload.password ?? "");
+    setNewRootPassword("");
+    setShowRootPassword(true);
+  }
+
+  async function changeRootPassword() {
+    const payload = (await request("/api/mysql/change-password", { password: newRootPassword })) as { password?: string };
+    setRootPassword(payload.password ?? "");
+    setNewRootPassword("");
+    setShowRootPassword(true);
+  }
+
+  return (
+    <div className="services-view">
+      <div className="services-overview">
+        <ServiceSnapshot icon={Play} label="Running" value={`${runningServices}/5`} detail="core services" tone={runningServices === 5 ? "green" : runningServices > 0 ? "amber" : "red"} />
+        <ServiceSnapshot icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} detail={`${summary.runtimes.php.length} versions`} tone={summary.services.php.state === "running" ? "green" : "amber"} />
+        <ServiceSnapshot icon={Database} label="Databases" value={summary.services.mysql.state} detail={`MySQL ${summary.config.mysql.version} · Redis · MongoDB`} tone={summary.services.mysql.state === "running" ? "green" : "amber"} />
+        <ServiceSnapshot icon={Server} label="Web Server" value={summary.services.nginx.state} detail={`HTTP ${summary.config.nginx.httpPort} / HTTPS ${summary.config.nginx.httpsPort}`} tone={summary.services.nginx.state === "running" ? "green" : "amber"} />
+      </div>
+
+      <div className="services-workbench">
+        <aside className="services-list" aria-label="Service list">
+          <ServiceNavButton icon={Database} label="MySQL" detail={`:${summary.config.mysql.port}`} service={summary.services.mysql} active={servicesPane === "mysql"} onClick={() => setServicesPane("mysql")} />
+          <ServiceNavButton icon={Database} label="Redis" detail={`:${summary.config.redis.port}`} service={summary.services.redis} active={servicesPane === "redis"} onClick={() => setServicesPane("redis")} />
+          <ServiceNavButton icon={Database} label="MongoDB" detail={`:${summary.config.mongodb.port}`} service={summary.services.mongodb} active={servicesPane === "mongodb"} onClick={() => setServicesPane("mongodb")} />
+          <ServiceNavButton
+            icon={Database}
+            label="phpMyAdmin"
+            detail={summary.phpMyAdmin.installed ? "Installed" : "Missing"}
+            service={{
+              name: "phpMyAdmin",
+              state: summary.phpMyAdmin.installed ? "running" : "stopped",
+              version: summary.phpMyAdmin.version
+            }}
+            active={servicesPane === "phpmyadmin"}
+            onClick={() => setServicesPane("phpmyadmin")}
+          />
+          <ServiceNavButton icon={SquareTerminal} label="PHP" detail={summary.config.globalPhpVersion} service={summary.services.php} active={servicesPane === "php"} onClick={() => setServicesPane("php")} />
+          <ServiceNavButton icon={Server} label="Nginx" detail={`:${summary.config.nginx.httpPort}`} service={summary.services.nginx} active={servicesPane === "nginx"} onClick={() => setServicesPane("nginx")} />
+          <button className={servicesPane === "all" ? "service-nav-item active" : "service-nav-item"} onClick={() => setServicesPane("all")}>
+            <ListRestart size={17} />
+            <div>
+              <strong>All Services</strong>
+              <span>full stack view</span>
+            </div>
+          </button>
+        </aside>
+
+        <div className="services-detail">
+      <div className={`services-grid ${servicesPane === "all" ? "" : "focused-services-grid"}`}>
+        {showPhp ? (
+        <div className="service-panel">
+          <ServiceHeader
+            icon={SquareTerminal}
+            title="PHP"
+            service={summary.services.php}
+            detail={`${summary.services.php.message ?? ""} ${phpFastCgiEndpoint(summary.config.globalPhpVersion)}`.trim()}
+          />
+          <RuntimePicker runtimes={summary.runtimes.php} value={phpVersion} onChange={setPhpVersion} />
+          {phpJob && (isActiveRuntimeJob(phpJob) || phpJob.status === "failed") ? <RuntimeProgress job={phpJob} /> : null}
+          <div className="service-actions">
+            {phpRuntime ? (
+              <button
+                className={!phpRuntime.installed || phpRuntime.updateAvailable ? "primary" : ""}
+                disabled={busy || (phpRuntime.installed && !phpRuntime.updateAvailable) || Boolean(phpJob && isActiveRuntimeJob(phpJob))}
+                onClick={() => void startRuntimeInstall("php", phpRuntime.version, Boolean(phpRuntime.updateAvailable))}
+              >
+                <Download size={18} />
+                <span>{runtimeActionLabel(phpRuntime, phpJob, "Install")}</span>
+              </button>
+            ) : null}
+            <button className="primary" disabled={busy || !phpRuntime?.installed || phpVersion === summary.config.globalPhpVersion} onClick={() => void post("/api/php/use", { version: phpVersion })}>
+              <BadgeCheck size={18} />
+              <span>Use</span>
+            </button>
+            <button disabled={busy || summary.services.php.state === "running"} onClick={() => void post("/api/php-fcgi/start")}>
+              <Play size={18} />
+              <span>Start</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/php-fcgi/stop")}>
+              <CircleStop size={18} />
+              <span>Stop</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/php-fcgi/restart")}>
+              <RotateCw size={18} />
+              <span>Restart</span>
+            </button>
+          </div>
+        </div>
+        ) : null}
+
+        {showNginx ? (
+        <div className="service-panel">
+          <ServiceHeader icon={Server} title="Nginx" service={summary.services.nginx} detail={`HTTP ${summary.config.nginx.httpPort} / HTTPS ${summary.config.nginx.httpsPort}`} />
+          <RuntimePicker runtimes={[summary.runtimes.nginx]} value={summary.runtimes.nginx.version} onChange={() => undefined} />
+          {nginxJob && (isActiveRuntimeJob(nginxJob) || nginxJob.status === "failed") ? <RuntimeProgress job={nginxJob} /> : null}
+          <div className="service-actions">
+            <button
+              className={!summary.runtimes.nginx.installed || summary.runtimes.nginx.updateAvailable ? "primary" : ""}
+              disabled={busy || (summary.runtimes.nginx.installed && !summary.runtimes.nginx.updateAvailable) || Boolean(nginxJob && isActiveRuntimeJob(nginxJob))}
+              onClick={() => void startRuntimeInstall("nginx", summary.runtimes.nginx.version, Boolean(summary.runtimes.nginx.updateAvailable))}
+            >
+              <Download size={18} />
+              <span>{runtimeActionLabel(summary.runtimes.nginx, nginxJob, "Install")}</span>
+            </button>
+            <button disabled={busy || summary.services.nginx.state === "running"} onClick={() => void post("/api/nginx/start")}>
+              <Play size={18} />
+              <span>Start</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/nginx/stop")}>
+              <CircleStop size={18} />
+              <span>Stop</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/nginx/restart")}>
+              <RotateCw size={18} />
+              <span>Restart</span>
+            </button>
+          </div>
+        </div>
+        ) : null}
+
+        {showMysql ? (
+        <div className="service-panel wide-service-panel">
+          <ServiceHeader icon={Database} title="MySQL" service={summary.services.mysql} detail={`127.0.0.1:${summary.config.mysql.port}`} />
+          <RuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
+          {mysqlJob && (isActiveRuntimeJob(mysqlJob) || mysqlJob.status === "failed") ? <RuntimeProgress job={mysqlJob} /> : null}
+          <div className="service-actions">
+            {mysqlRuntime ? (
+              <button
+                className={!mysqlRuntime.installed || mysqlRuntime.updateAvailable ? "primary" : ""}
+                disabled={busy || (mysqlRuntime.installed && !mysqlRuntime.updateAvailable) || Boolean(mysqlJob && isActiveRuntimeJob(mysqlJob))}
+                onClick={() => void startRuntimeInstall("mysql", mysqlRuntime.version, Boolean(mysqlRuntime.updateAvailable))}
+              >
+                <Download size={18} />
+                <span>{runtimeActionLabel(mysqlRuntime, mysqlJob, "Install")}</span>
+              </button>
+            ) : null}
+            <button className="primary" disabled={busy || !mysqlRuntime?.installed || mysqlVersion === summary.config.mysql.version} onClick={() => void useMysqlVersion()}>
+              <BadgeCheck size={18} />
+              <span>Use</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mysql/init")}>
+              <BadgeCheck size={18} />
+              <span>Initialize</span>
+            </button>
+            <button disabled={busy || summary.services.mysql.state === "running"} onClick={() => void post("/api/mysql/start")}>
+              <Play size={18} />
+              <span>Start</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mysql/stop")}>
+              <CircleStop size={18} />
+              <span>Stop</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mysql/restart")}>
+              <RotateCw size={18} />
+              <span>Restart</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mysql/shell")}>
+              <SquareTerminal size={18} />
+              <span>Shell</span>
+            </button>
+          </div>
+          <div className="service-inline-settings">
+            <input value={mysqlPort} onChange={(event) => setMysqlPort(event.target.value)} inputMode="numeric" />
+            <button disabled={busy || !mysqlPort.trim()} onClick={() => void post("/api/mysql/port", { port: Number(mysqlPort) })}>
+              <Settings size={18} />
+              <span>Set Port</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mysql/port", { port: "auto" })}>
+              <RotateCw size={18} />
+              <span>Auto</span>
+            </button>
+          </div>
+        </div>
+        ) : null}
+
+        {showRedis ? (
+        <div className="service-panel">
+          <ServiceHeader icon={Database} title="Redis" service={summary.services.redis} detail={`127.0.0.1:${summary.config.redis.port}`} />
+          <RuntimePicker runtimes={[summary.runtimes.redis]} value={summary.runtimes.redis.version} onChange={() => undefined} />
+          {redisJob && (isActiveRuntimeJob(redisJob) || redisJob.status === "failed") ? <RuntimeProgress job={redisJob} /> : null}
+          <div className="service-actions">
+            <button
+              className={!summary.runtimes.redis.installed || summary.runtimes.redis.updateAvailable ? "primary" : ""}
+              disabled={busy || (summary.runtimes.redis.installed && !summary.runtimes.redis.updateAvailable) || Boolean(redisJob && isActiveRuntimeJob(redisJob))}
+              onClick={() => void startRuntimeInstall("redis", summary.runtimes.redis.version, Boolean(summary.runtimes.redis.updateAvailable))}
+            >
+              <Download size={18} />
+              <span>{runtimeActionLabel(summary.runtimes.redis, redisJob, "Install")}</span>
+            </button>
+            <button disabled={busy || summary.services.redis.state === "running"} onClick={() => void post("/api/redis/start")}>
+              <Play size={18} />
+              <span>Start</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/redis/stop")}>
+              <CircleStop size={18} />
+              <span>Stop</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/redis/restart")}>
+              <RotateCw size={18} />
+              <span>Restart</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/redis/shell")}>
+              <SquareTerminal size={18} />
+              <span>CLI</span>
+            </button>
+          </div>
+          <div className="service-inline-settings">
+            <input value={redisPort} onChange={(event) => setRedisPort(event.target.value)} inputMode="numeric" />
+            <button disabled={busy || !redisPort.trim()} onClick={() => void post("/api/redis/port", { port: Number(redisPort) })}>
+              <Settings size={18} />
+              <span>Set Port</span>
+            </button>
+          </div>
+        </div>
+        ) : null}
+
+        {showMongoDb ? (
+        <div className="service-panel">
+          <ServiceHeader icon={Database} title="MongoDB" service={summary.services.mongodb} detail={`127.0.0.1:${summary.config.mongodb.port}`} />
+          <RuntimePicker runtimes={[summary.runtimes.mongodb]} value={summary.runtimes.mongodb.version} onChange={() => undefined} />
+          {mongodbJob && (isActiveRuntimeJob(mongodbJob) || mongodbJob.status === "failed") ? <RuntimeProgress job={mongodbJob} /> : null}
+          <div className="service-actions">
+            <button
+              className={!summary.runtimes.mongodb.installed || summary.runtimes.mongodb.updateAvailable ? "primary" : ""}
+              disabled={busy || (summary.runtimes.mongodb.installed && !summary.runtimes.mongodb.updateAvailable) || Boolean(mongodbJob && isActiveRuntimeJob(mongodbJob))}
+              onClick={() => void startRuntimeInstall("mongodb", summary.runtimes.mongodb.version, Boolean(summary.runtimes.mongodb.updateAvailable))}
+            >
+              <Download size={18} />
+              <span>{runtimeActionLabel(summary.runtimes.mongodb, mongodbJob, "Install")}</span>
+            </button>
+            <button disabled={busy || summary.services.mongodb.state === "running"} onClick={() => void post("/api/mongodb/start")}>
+              <Play size={18} />
+              <span>Start</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mongodb/stop")}>
+              <CircleStop size={18} />
+              <span>Stop</span>
+            </button>
+            <button disabled={busy} onClick={() => void post("/api/mongodb/restart")}>
+              <RotateCw size={18} />
+              <span>Restart</span>
+            </button>
+          </div>
+          <div className="service-inline-settings">
+            <input value={mongodbPort} onChange={(event) => setMongoDbPort(event.target.value)} inputMode="numeric" />
+            <button disabled={busy || !mongodbPort.trim()} onClick={() => void post("/api/mongodb/port", { port: Number(mongodbPort) })}>
+              <Settings size={18} />
+              <span>Set Port</span>
+            </button>
+          </div>
+        </div>
+        ) : null}
+      </div>
+
+      {showMysql || showPhpMyAdmin ? (
+      <div className="service-panel tools-service-panel">
+        <ServiceHeader
+          icon={Database}
+          title="Database Workbench"
+          service={summary.services.mysql}
+          detail={`MySQL ${summary.config.mysql.version} · 127.0.0.1:${summary.config.mysql.port}`}
+        />
+        <div className="database-workbench">
+          <div className="database-card">
+            <h2>Create Database</h2>
+            <div className="service-inline-settings">
+              <input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} />
+              <button className="primary" disabled={busy || !databaseName.trim()} onClick={() => void post("/api/mysql/create-db", { name: databaseName })}>
+                <Database size={18} />
+                <span>Create</span>
+              </button>
+              <button disabled={busy || !databaseName.trim()} onClick={() => void loadEnv()}>
+                <FileText size={18} />
+                <span>Laravel Env</span>
+              </button>
+            </div>
+            {envText ? <pre className="snippet compact-snippet">{envText}</pre> : null}
+          </div>
+
+          <div className="database-card">
+            <h2>Root Password</h2>
+            <div className="service-inline-settings">
+              <input readOnly type={showRootPassword ? "text" : "password"} value={rootPassword} placeholder="Stored password" />
+              <button disabled={busy} onClick={() => void loadRootPassword()}>
+                <KeyRound size={18} />
+                <span>Show</span>
+              </button>
+              <button disabled={busy || summary.services.mysql.state !== "running"} onClick={() => void resetRootPassword()}>
+                <RotateCw size={18} />
+                <span>Reset</span>
+              </button>
+            </div>
+            <div className="service-inline-settings">
+              <input type="password" value={newRootPassword} onChange={(event) => setNewRootPassword(event.target.value)} placeholder="New root password" />
+              <button className="primary" disabled={busy || summary.services.mysql.state !== "running" || newRootPassword.length < 8} onClick={() => void changeRootPassword()}>
+                <BadgeCheck size={18} />
+                <span>Change</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="database-card">
+            <h2>phpMyAdmin</h2>
+            <ServiceStrip
+              service={{
+                name: "phpMyAdmin",
+                state: summary.phpMyAdmin.installed ? "running" : "stopped",
+                version: summary.phpMyAdmin.version,
+                message: summary.phpMyAdmin.installed ? summary.phpMyAdmin.url : "Not installed"
+              }}
+            />
+            <div className="service-actions">
+              <button className={!summary.phpMyAdmin.installed ? "primary" : ""} disabled={busy || summary.phpMyAdmin.installed} onClick={() => void request("/api/phpmyadmin/install")}>
+                <Download size={18} />
+                <span>{summary.phpMyAdmin.installed ? "Installed" : "Install"}</span>
+              </button>
+              <button disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void post("/api/hosts/sync", {})}>
+                <ListRestart size={18} />
+                <span>Sync Hosts</span>
+              </button>
+              <button className="link-command-button" disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void openExternalUrl(summary.phpMyAdmin.url)}>
+                <ExternalLink size={16} />
+                <span>Open</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <dl className="details compact-service-details">
+          <dt>MySQL data</dt>
+          <dd>{summary.paths.mysqlData}</dd>
+          <dt>phpMyAdmin</dt>
+          <dd>{summary.phpMyAdmin.installed ? summary.phpMyAdmin.root : "Not installed"}</dd>
+        </dl>
+      </div>
+      ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ServiceNavButton({
+  icon: Icon,
+  label,
+  detail,
+  service,
+  active,
+  onClick
+}: {
+  icon: typeof Globe;
+  label: string;
+  detail: string;
+  service: ServiceStatus;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button className={active ? "service-nav-item active" : "service-nav-item"} onClick={onClick}>
+      <Icon size={17} />
+      <div>
+        <strong>{label}</strong>
+        <span>{detail}</span>
+      </div>
+      <Badge label={service.state} tone={service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber"} />
+    </button>
+  );
+}
+
+function ServiceSnapshot({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone
+}: {
+  icon: typeof Globe;
+  label: string;
+  value: string;
+  detail: string;
+  tone: "green" | "amber" | "red";
+}) {
+  return (
+    <div className="service-snapshot">
+      <Icon size={18} />
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+      <span className={`status-dot ${tone}`} />
+    </div>
+  );
+}
+
+function ServiceHeader({ icon: Icon, title, service, detail }: { icon: typeof Globe; title: string; service: ServiceStatus; detail?: string }) {
+  return (
+    <div className="service-panel-header">
+      <Icon size={20} />
+      <div>
+        <strong>{title}</strong>
+        <span>{detail || service.message || service.version || ""}</span>
+      </div>
+      <Badge label={service.state} tone={service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber"} />
+    </div>
+  );
+}
+
+function RuntimePicker({ runtimes, value, onChange }: { runtimes: RuntimeInstallStatus[]; value: string; onChange: (version: string) => void }) {
+  return (
+    <div className="runtime-picker">
+      {runtimes.map((runtime) => (
+        <button key={`${runtime.name}-${runtime.version}`} className={value === runtime.version ? "active" : ""} onClick={() => onChange(runtime.version)}>
+          <strong>{runtimeDisplayVersion(runtime)}</strong>
+          <span>{runtime.installed ? (runtime.updateAvailable ? "Update" : "Installed") : "Missing"}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -252,7 +1360,7 @@ function Setup({
 }: {
   summary: DashboardSummary;
   installJobs: RuntimeJobMap;
-  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<void>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
   removeRuntime: (kind: RuntimeKind, version?: string) => Promise<void>;
   busy: boolean;
 }) {
@@ -307,7 +1415,7 @@ function RuntimePanel({
   items: RuntimeInstallStatus[];
   installJobs: RuntimeJobMap;
   busy: boolean;
-  install: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<void>;
+  install: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
   uninstall: (kind: RuntimeKind, version?: string) => Promise<void>;
 }) {
   const jobs = Object.values(installJobs);
@@ -370,12 +1478,55 @@ function RuntimePanel({
 
 function Sites({ summary, post, request, busy }: ViewProps & { request: (path: string, body?: Record<string, unknown>) => Promise<unknown> }) {
   const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
+  const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
+  const [siteTab, setSiteTab] = useState<"general" | "information">("general");
+  const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
+  const [entryPath, setEntryPath] = useState(selectedSite?.entryPath ?? ".");
+  const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
 
   async function browseFolder() {
     const payload = (await request("/api/dialog/folder", { initialPath: folder })) as { path?: string | null };
     if (payload.path) {
       setFolder(payload.path);
     }
+  }
+
+  useEffect(() => {
+    if (!summary.sites.some((site) => site.domain === selectedDomain)) {
+      setSelectedDomain(summary.sites[0]?.domain ?? "");
+    }
+  }, [summary.sites, selectedDomain]);
+
+  useEffect(() => {
+    setEntryPath(selectedSite?.entryPath ?? ".");
+    setSitePhpVersion(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
+  }, [selectedSite?.domain, selectedSite?.entryPath, selectedSite?.phpVersion, summary.config.globalPhpVersion]);
+
+  async function saveSelectedEntry(nextEntry = entryPath) {
+    if (!selectedSite) {
+      return;
+    }
+    await post("/api/sites/entry", { site: selectedSite.domain, entry: nextEntry });
+  }
+
+  async function resetSelectedEntry() {
+    if (!selectedSite) {
+      return;
+    }
+    const defaultEntry = selectedSite.framework === "Laravel" ? "public" : ".";
+    setEntryPath(defaultEntry);
+    await post("/api/sites/entry", { site: selectedSite.domain, entry: null });
+  }
+
+  async function saveSelectedPhpVersion() {
+    if (!selectedSite) {
+      return;
+    }
+    if (sitePhpVersion === summary.config.globalPhpVersion) {
+      await post("/api/php/unisolate", { site: selectedSite.domain });
+      return;
+    }
+    await post("/api/php/isolate", { site: selectedSite.domain, version: sitePhpVersion });
   }
 
   return (
@@ -397,8 +1548,117 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
         </button>
       </div>
       <SslTrustPanel summary={summary} post={post} busy={busy} />
-      <SiteEntryPanel sites={summary.sites} post={post} busy={busy} />
-      <SitesTable sites={summary.sites} post={post} busy={busy} caTrusted={summary.ssl.trusted} />
+      {selectedSite ? (
+        <div className="sites-workbench">
+          <aside className="sites-list-pane">
+            <div className="sites-list-header">
+              <strong>Sites</strong>
+              <span>{summary.sites.length}</span>
+            </div>
+            <div className="sites-list">
+              {summary.sites.map((site) => (
+                <button key={site.domain} className={site.domain === selectedSite.domain ? "site-list-item active" : "site-list-item"} onClick={() => setSelectedDomain(site.domain)}>
+                  <span>{site.domain}</span>
+                  <small>{site.framework}</small>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="site-detail-pane">
+            <div className="site-detail-header">
+              <div>
+                <span className="eyebrow">{selectedSite.framework}</span>
+                <h2>{selectedSite.name}</h2>
+                <button className="link-button" onClick={() => void openExternalUrl(selectedSite.url)}>
+                  <ExternalLink size={15} />
+                  <span>{selectedSite.url}</span>
+                </button>
+              </div>
+              <button className={selectedSite.secured ? "" : "primary"} disabled={busy || (selectedSite.secured && !summary.ssl.trusted)} onClick={() => void post(selectedSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: selectedSite.domain })}>
+                {selectedSite.secured ? <LockOpen size={18} /> : <Lock size={18} />}
+                <span>{selectedSite.secured ? "Unsecure" : "Secure"}</span>
+              </button>
+            </div>
+
+            <div className="site-detail-tabs">
+              <button className={siteTab === "general" ? "active" : ""} onClick={() => setSiteTab("general")}>General</button>
+              <button className={siteTab === "information" ? "active" : ""} onClick={() => setSiteTab("information")}>Information</button>
+            </div>
+
+            {siteTab === "general" ? (
+              <div className="site-general-grid">
+                <div className="site-preview-panel">
+                  <div className="site-preview-window">
+                    <Globe size={38} />
+                    <strong>{selectedSite.domain}</strong>
+                    <span>{selectedSite.documentRoot}</span>
+                  </div>
+                  <button className="primary" onClick={() => void openExternalUrl(selectedSite.url)}>
+                    <ExternalLink size={18} />
+                    <span>Open Site</span>
+                  </button>
+                </div>
+                <div className="site-controls-panel">
+                  <label>
+                    <span>PHP Version</span>
+                    <select value={sitePhpVersion} onChange={(event) => setSitePhpVersion(event.target.value)}>
+                      {summary.runtimes.php.map((runtime) => (
+                        <option key={runtime.version} value={runtime.version}>
+                          PHP {runtime.version}{runtime.installed ? "" : " (missing)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button disabled={busy || sitePhpVersion === selectedSite.phpVersion} onClick={() => void saveSelectedPhpVersion()}>
+                    <BadgeCheck size={18} />
+                    <span>Apply PHP</span>
+                  </button>
+                  <label>
+                    <span>Nginx Entry</span>
+                    <input value={entryPath} onChange={(event) => setEntryPath(event.target.value)} />
+                  </label>
+                  <div className="button-row">
+                    <button disabled={busy} onClick={() => setEntryPath(".")}>
+                      <FolderOpen size={18} />
+                      <span>Project Root</span>
+                    </button>
+                    <button disabled={busy} onClick={() => setEntryPath("public")}>
+                      <FolderOpen size={18} />
+                      <span>public</span>
+                    </button>
+                    <button className="primary" disabled={busy || !entryPath.trim()} onClick={() => void saveSelectedEntry()}>
+                      <BadgeCheck size={18} />
+                      <span>Save Entry</span>
+                    </button>
+                    <button disabled={busy} onClick={() => void resetSelectedEntry()}>
+                      <RotateCw size={18} />
+                      <span>Reset</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <dl className="details site-info-details">
+                <dt>Domain</dt>
+                <dd>{selectedSite.domain}</dd>
+                <dt>URL</dt>
+                <dd>{selectedSite.url}</dd>
+                <dt>Project path</dt>
+                <dd>{selectedSite.path}</dd>
+                <dt>Document root</dt>
+                <dd>{selectedSite.documentRoot}</dd>
+                <dt>Entry</dt>
+                <dd>{selectedSite.entryPath}</dd>
+                <dt>PHP</dt>
+                <dd>{selectedSite.phpVersion}</dd>
+              </dl>
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="empty-state">No parked projects found.</div>
+      )}
     </>
   );
 }
@@ -520,6 +1780,10 @@ function SitesTable({
     void post(path, { site: site.domain });
   }
 
+  function openSite(site: Site) {
+    void openExternalUrl(site.url);
+  }
+
   return (
     <div className="table-frame">
       <table>
@@ -540,10 +1804,10 @@ function SitesTable({
               <tr key={site.domain}>
                 <td>
                   <div className="url-actions">
-                    <a href={site.url} target="_blank" rel="noreferrer">
+                    <button type="button" className="link-button" disabled={busy} onClick={() => openSite(site)} title={`Open ${site.url}`}>
                       {site.url}
                       <ExternalLink size={14} />
-                    </a>
+                    </button>
                   </div>
                 </td>
                 <td className="icon-column">
@@ -576,7 +1840,7 @@ function Nginx({
   busy
 }: ViewProps & {
   installJobs: RuntimeJobMap;
-  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<void>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
 }) {
   const nginx = summary.runtimes.nginx;
   const installJob = latestRuntimeJob(Object.values(installJobs), "nginx", nginx.version);
@@ -967,7 +2231,7 @@ function Mysql({
 }: ViewProps & {
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
   installJobs: RuntimeJobMap;
-  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<void>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
 }) {
   const [databaseName, setDatabaseName] = useState("app_name");
   const [port, setPort] = useState(String(summary.config.mysql.port));
@@ -1129,10 +2393,10 @@ function Mysql({
               <ListRestart size={18} />
               <span>Sync Hosts</span>
             </button>
-            <a className={!summary.phpMyAdmin.installed ? "disabled-link" : ""} href={summary.phpMyAdmin.url} target="_blank" rel="noreferrer">
+            <button className="link-command-button" disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void openExternalUrl(summary.phpMyAdmin.url)}>
               <ExternalLink size={16} />
               <span>Open</span>
-            </a>
+            </button>
           </div>
           <dl className="details">
             <dt>Root</dt>
@@ -1181,7 +2445,7 @@ function Redis({
   busy
 }: ViewProps & {
   installJobs: RuntimeJobMap;
-  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<void>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
 }) {
   const [port, setPort] = useState(String(summary.config.redis.port));
   const redis = summary.runtimes.redis;
@@ -1272,7 +2536,7 @@ function MongoDB({
   busy
 }: ViewProps & {
   installJobs: RuntimeJobMap;
-  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<void>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
 }) {
   const [port, setPort] = useState(String(summary.config.mongodb.port));
   const mongodb = summary.runtimes.mongodb;

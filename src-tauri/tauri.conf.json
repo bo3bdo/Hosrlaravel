@@ -32,6 +32,11 @@
     "resources": {
       "resources/node.exe": "node.exe",
       "resources/app": "app"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh"
+      }
     }
   }
 }

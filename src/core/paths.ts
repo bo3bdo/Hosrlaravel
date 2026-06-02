@@ -28,7 +28,7 @@ export function hostsFilePath(): string {
 export function getPaths(): LaraboxsPaths {
   const home = laraboxsHome();
   const nginxRoot = path.join(home, "services", "nginx");
-  const mysqlRoot = mysqlRootForVersion("8.4");
+  const mysqlRoot = mysqlRootForVersion("9.7");
   const redisRoot = redisRootForVersion("8.8");
   const mongodbRoot = mongodbRootForVersion("8.2");
 
@@ -40,7 +40,7 @@ export function getPaths(): LaraboxsPaths {
     nginxConfig: path.join(nginxRoot, "conf", "nginx.conf"),
     nginxSites: path.join(nginxRoot, "conf", "sites-enabled"),
     mysqlRoot,
-    mysqlData: mysqlDataForVersion("8.4"),
+    mysqlData: mysqlDataForVersion("9.7"),
     redisRoot,
     redisData: redisDataForVersion("8.8"),
     mongodbRoot,

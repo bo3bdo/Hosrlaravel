@@ -203,6 +203,11 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
   if (isMissingWindowsMysqlBinary(command.command)) {
     const config = await loadConfig();
     const message = `MySQL binary not found. Install MySQL ${config.mysql.version} from Setup or the MySQL page.`;
+    if (action === "stop") {
+      await stopAppLocalMysqlProcesses();
+      await appendLog("mysql", `${message} Fallback stop requested.`);
+      return getMysqlStatus("stop requested");
+    }
     await appendLog("mysql", message);
     return { name: "mysql", state: "unknown", version: config.mysql.version, port: config.mysql.port, message };
   }
