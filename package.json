@@ -1,0 +1,35 @@
+{
+  "name": "laraboxs-windows-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "laraboxs": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "api": "tsx src/api/server.ts",
+    "build": "tsc -p tsconfig.node.json && vite build",
+    "cli": "tsx src/cli/index.ts",
+    "dev": "vite --host 127.0.0.1",
+    "tauri": "tauri",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.app.json"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "selfsigned": "^5.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.6"
+  }
+}
