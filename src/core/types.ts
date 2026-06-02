@@ -20,11 +20,6 @@ export interface RedisConfig {
   port: number;
 }
 
-export interface MongoDbConfig {
-  version: string;
-  port: number;
-}
-
 export interface PhpConfig {
   memoryLimit: string;
   uploadMaxFilesize: string;
@@ -48,7 +43,6 @@ export interface LaraboxsConfig {
   nginx: NginxConfig;
   mysql: MysqlConfig;
   redis: RedisConfig;
-  mongodb: MongoDbConfig;
 }
 
 export interface Site {
@@ -86,7 +80,7 @@ export interface RuntimeInstallStatus {
   updateAvailable?: boolean;
 }
 
-export type RuntimeKind = "php" | "mysql" | "nginx" | "redis" | "mongodb" | "node" | "composer";
+export type RuntimeKind = "php" | "mysql" | "nginx" | "redis" | "node" | "composer";
 export type RuntimeInstallJobStatus = "queued" | "downloading" | "extracting" | "installing" | "complete" | "failed";
 
 export interface RuntimeInstallProgress {
@@ -166,8 +160,6 @@ export interface LaraboxsPaths {
   mysqlData: string;
   redisRoot: string;
   redisData: string;
-  mongodbRoot: string;
-  mongodbData: string;
   phpRoot: string;
   certs: string;
   hostsFile: string;
@@ -181,14 +173,12 @@ export interface DashboardSummary {
     nginx: ServiceStatus;
     mysql: ServiceStatus;
     redis: ServiceStatus;
-    mongodb: ServiceStatus;
     php: ServiceStatus;
   };
   runtimes: {
     mysql: RuntimeInstallStatus[];
     nginx: RuntimeInstallStatus;
     redis: RuntimeInstallStatus;
-    mongodb: RuntimeInstallStatus;
     php: RuntimeInstallStatus[];
     node: RuntimeInstallStatus;
     composer: RuntimeInstallStatus;

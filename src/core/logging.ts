@@ -7,8 +7,7 @@ const logSources = [
   { scope: "nginx", file: "nginx-error.log" },
   { scope: "mysql", file: "mysql-error.log" },
   { scope: "php", file: "php-fastcgi.log" },
-  { scope: "redis", file: "redis.log" },
-  { scope: "mongodb", file: "mongodb.log" }
+  { scope: "redis", file: "redis.log" }
 ];
 
 export async function appendLog(scope: string, message: string): Promise<void> {

@@ -26,7 +26,6 @@ const installablePhpExtensions: PhpExtensionPackage[] = [
   { extension: "redis", packageVersion: "6.3.0" },
   { extension: "imagick", packageVersion: "3.8.0" },
   { extension: "imap", packageVersion: "1.0.3" },
-  { extension: "mongodb", packageVersion: "2.2.0" },
   { extension: "sqlsrv", packageVersion: "5.13.0" },
   { extension: "pdo_sqlsrv", packageVersion: "5.13.0" }
 ];

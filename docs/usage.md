@@ -22,14 +22,12 @@ laraboxs start
 laraboxs mysql:status
 laraboxs mysql:init
 laraboxs mysql:use 9.7
+laraboxs mysql:use mariadb-11.8.6
 laraboxs mysql:port --auto
 laraboxs mysql:create-db app_name
 laraboxs mysql:env app_name
 laraboxs mysql:password
 laraboxs mysql:change-password "new-secure-password"
-laraboxs mongodb:status
-laraboxs mongodb:start
-laraboxs mongodb:port --auto
 laraboxs redis:status
 laraboxs redis:start
 laraboxs php-fcgi:status
@@ -61,7 +59,7 @@ npm start
 
 Open `http://127.0.0.1:47899`.
 
-On first launch, choose a sites folder. laraboxs parks it and installs the default PHP, MySQL, Nginx, Composer, and Node.js stack into `%USERPROFILE%\.config\laraboxs`.
+On first launch, choose a sites folder and database runtime. laraboxs parks it and installs the default PHP, selected MySQL or MariaDB runtime, Nginx, Composer, and Node.js stack into `%USERPROFILE%\.config\laraboxs`.
 
 The Sites section includes a Nginx Entry panel for each site. Laravel projects default to `public`; PHP/static projects default to `.`. Set a relative entry such as `public`, `web`, or `dist`, then save to regenerate per-site Nginx configs. The CLI equivalent is `laraboxs site:entry <site> <entry>`, or `laraboxs site:entry <entry>` from inside a parked site.
 
@@ -73,12 +71,11 @@ laraboxs install php 8.5
 laraboxs install mysql 9.7
 laraboxs install mysql 8.4
 laraboxs install mysql 8.0
-laraboxs install mongodb
+laraboxs install mysql mariadb-11.8.6
 laraboxs install redis
 laraboxs install node
 laraboxs install composer
 laraboxs install --force php 8.4
-laraboxs uninstall mongodb
 laraboxs uninstall redis
 laraboxs runtimes
 ```
@@ -94,7 +91,7 @@ laraboxs can download runtimes into app data and starts services when the matchi
 - MySQL 9.7: `%USERPROFILE%\.config\laraboxs\services\mysql\9.7\bin\mysqld.exe`
 - MySQL 8.4: `%USERPROFILE%\.config\laraboxs\services\mysql\8.4\bin\mysqld.exe`
 - MySQL 8.0: `%USERPROFILE%\.config\laraboxs\services\mysql\8.0\bin\mysqld.exe`
-- MongoDB: `%USERPROFILE%\.config\laraboxs\services\mongodb\8.2\bin\mongod.exe`
+- MariaDB 11.8.6: `%USERPROFILE%\.config\laraboxs\services\mariadb\11.8.6\bin\mysqld.exe`
 - Redis: `%USERPROFILE%\.config\laraboxs\services\redis\8.8\redis-server.exe`
 - phpMyAdmin: `%USERPROFILE%\.config\laraboxs\tools\phpmyadmin\5.2.3`
 

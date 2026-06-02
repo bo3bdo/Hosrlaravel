@@ -2,14 +2,14 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { getRuntimeStatus, runtimeManifest, uninstallRuntime } from "../src/core/runtimes.js";
+import { ensureComposerCommandShims, getRuntimeStatus, mergePathEntries, runtimeManifest, uninstallRuntime } from "../src/core/runtimes.js";
 
 describe("runtime manifest", () => {
   beforeEach(async () => {
     process.env.LARABOXS_HOME = await mkdir(path.join(os.tmpdir(), `laraboxs-runtimes-${Date.now()}-`), { recursive: true });
   });
 
-  it("contains installable PHP, MySQL, Nginx, Redis, MongoDB, Node, and Composer runtimes", () => {
+  it("contains installable PHP, MySQL, MariaDB, Nginx, Redis, Node, and Composer runtimes", () => {
     const manifest = runtimeManifest();
 
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("php:8.4");
@@ -17,9 +17,9 @@ describe("runtime manifest", () => {
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("mysql:9.7");
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("mysql:8.4");
     expect(manifest.map((entry) => `${entry.kind}:${entry.version}`)).toContain("mysql:8.0");
+    expect(manifest.map((entry) => `${entry.name}:${entry.version}`)).toContain("MariaDB:mariadb-11.8.6");
     expect(manifest.map((entry) => entry.kind)).toContain("nginx");
     expect(manifest.map((entry) => entry.kind)).toContain("redis");
-    expect(manifest.map((entry) => entry.kind)).toContain("mongodb");
     expect(manifest.map((entry) => entry.kind)).toContain("node");
     expect(manifest.map((entry) => entry.kind)).toContain("composer");
   });
@@ -27,17 +27,37 @@ describe("runtime manifest", () => {
   it("reports runtime installation status from laraboxs app data", () => {
     const status = getRuntimeStatus();
 
-    expect(status.mysql).toHaveLength(3);
+    expect(status.mysql).toHaveLength(4);
     expect(status.mysql.find((entry) => entry.version === "9.7")?.installed).toBe(false);
     expect(status.mysql.find((entry) => entry.version === "9.7")?.binary).toContain(path.join("services", "mysql", "9.7", "bin", "mysqld.exe"));
+    expect(status.mysql.find((entry) => entry.version === "mariadb-11.8.6")?.binary).toContain(path.join("services", "mariadb", "11.8.6", "bin", "mysqld.exe"));
     expect(status.nginx.installed).toBe(false);
     expect(status.nginx.binary).toContain(path.join("services", "nginx", "nginx.exe"));
     expect(status.redis.installed).toBe(false);
     expect(status.redis.binary).toContain(path.join("services", "redis", "8.8", "redis-server.exe"));
-    expect(status.mongodb.installed).toBe(false);
-    expect(status.mongodb.binary).toContain(path.join("services", "mongodb", "8.2", "bin", "mongod.exe"));
     expect(status.php).toHaveLength(2);
     expect(status.composer.binary.endsWith("composer.phar")).toBe(true);
+  });
+
+  it("merges developer tool PATH entries without duplicates", () => {
+    const current = ["C:\\Windows", "C:\\Tools\\node"].join(";");
+    const next = mergePathEntries(current, ["c:\\tools\\node\\", "C:\\Tools\\composer"]);
+
+    expect(next).toBe("c:\\tools\\node\\;C:\\Tools\\composer;C:\\Windows");
+  });
+
+  it("creates Composer command shims beside the phar", async () => {
+    const composer = runtimeManifest().find((entry) => entry.kind === "composer");
+    expect(composer).toBeTruthy();
+    await mkdir(composer!.root, { recursive: true });
+    await writeFile(composer!.binary, "fake composer", "utf8");
+
+    await ensureComposerCommandShims();
+
+    const cmd = await readFile(path.join(composer!.root, "composer.cmd"), "utf8");
+    const bat = await readFile(path.join(composer!.root, "composer.bat"), "utf8");
+    expect(cmd).toContain("composer.phar");
+    expect(bat).toContain("composer.phar");
   });
 
   it("discovers installed PHP versions that are not in the install manifest", async () => {

@@ -29,7 +29,6 @@ const requestedPhpExtensions = [
   "xsl",
   "redis",
   "imagick",
-  "mongodb",
   "pgsql",
   "pdo_pgsql",
   "sqlsrv",

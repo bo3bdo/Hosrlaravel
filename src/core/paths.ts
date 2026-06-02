@@ -30,7 +30,6 @@ export function getPaths(): LaraboxsPaths {
   const nginxRoot = path.join(home, "services", "nginx");
   const mysqlRoot = mysqlRootForVersion("9.7");
   const redisRoot = redisRootForVersion("8.8");
-  const mongodbRoot = mongodbRootForVersion("8.2");
 
   return {
     home,
@@ -43,8 +42,6 @@ export function getPaths(): LaraboxsPaths {
     mysqlData: mysqlDataForVersion("9.7"),
     redisRoot,
     redisData: redisDataForVersion("8.8"),
-    mongodbRoot,
-    mongodbData: mongodbDataForVersion("8.2"),
     phpRoot: path.join(home, "runtimes", "php"),
     certs: path.join(home, "certs"),
     hostsFile: hostsFilePath()
@@ -52,11 +49,20 @@ export function getPaths(): LaraboxsPaths {
 }
 
 export function mysqlRootForVersion(version: string): string {
-  return path.join(laraboxsHome(), "services", "mysql", version);
+  const engine = isMariaDbVersion(version) ? "mariadb" : "mysql";
+  return path.join(laraboxsHome(), "services", engine, databaseVersionFolder(version));
 }
 
 export function mysqlDataForVersion(version: string): string {
   return path.join(mysqlRootForVersion(version), "data");
+}
+
+function isMariaDbVersion(version: string): boolean {
+  return version.toLowerCase().startsWith("mariadb-");
+}
+
+function databaseVersionFolder(version: string): string {
+  return isMariaDbVersion(version) ? version.slice("mariadb-".length) : version;
 }
 
 export function redisRootForVersion(version: string): string {
@@ -65,14 +71,6 @@ export function redisRootForVersion(version: string): string {
 
 export function redisDataForVersion(version: string): string {
   return path.join(redisRootForVersion(version), "data");
-}
-
-export function mongodbRootForVersion(version: string): string {
-  return path.join(laraboxsHome(), "services", "mongodb", version);
-}
-
-export function mongodbDataForVersion(version: string): string {
-  return path.join(mongodbRootForVersion(version), "data", "db");
 }
 
 export async function ensureBaseDirs(): Promise<LaraboxsPaths> {
@@ -84,7 +82,6 @@ export async function ensureBaseDirs(): Promise<LaraboxsPaths> {
     mkdir(paths.nginxSites, { recursive: true }),
     mkdir(paths.mysqlData, { recursive: true }),
     mkdir(paths.redisData, { recursive: true }),
-    mkdir(paths.mongodbData, { recursive: true }),
     mkdir(paths.phpRoot, { recursive: true }),
     mkdir(paths.certs, { recursive: true })
   ]);

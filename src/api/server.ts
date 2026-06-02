@@ -19,16 +19,16 @@ import {
   setMysqlPort,
   setMysqlVersion
 } from "../core/mysql.js";
-import { findAvailableMongoDbPort, runMongoDb, setMongoDbPort } from "../core/mongodb.js";
 import { getNginxStatus, runNginx, updateNginxSettings, writeNginxConfigs } from "../core/nginx.js";
 import { getPhpFastCgiStatus, getPhpSettings, runPhpFastCgi, updatePhpSettings } from "../core/php.js";
 import { getPhpMyAdminStatus, installPhpMyAdmin, writePhpMyAdminConfig } from "../core/phpmyadmin.js";
 import { findAvailableRedisPort, redisCliCommand, runRedis, setRedisPort } from "../core/redis.js";
-import { uninstallRuntime } from "../core/runtimes.js";
+import { ensureDeveloperCommandPath, uninstallRuntime } from "../core/runtimes.js";
 import { getRuntimeInstallJob, listRuntimeInstallJobs, startRuntimeInstallJob } from "./runtimeJobs.js";
 import { selectFolder } from "./dialogs.js";
 import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
 import { getDashboardSummary } from "../core/summary.js";
+import { readSitePreviewImage } from "../core/sitePreview.js";
 import type { RuntimeKind, ServiceAction } from "../core/types.js";
 
 const host = "127.0.0.1";
@@ -85,6 +85,25 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/settings") {
+      const body = await readJson(request);
+      const settings = assertGeneralSettings(body);
+      await updateConfig((config) => {
+        if (settings.tld) {
+          config.tld = settings.tld;
+        }
+        if (typeof settings.setupComplete === "boolean") {
+          config.setupComplete = settings.setupComplete;
+        }
+      });
+      await writeNginxConfigs();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/sites/park") {
       const body = await readJson(request);
       await addParkedFolder(assertString(body.path, "path"));
@@ -96,6 +115,13 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/open-url") {
       const body = await readJson(request);
       openExternalUrl(assertHttpUrl(body.url));
+      await sendJson(response, { ok: true });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/open-path") {
+      const body = await readJson(request);
+      openLocalPath(assertString(body.path, "path"), body.reveal === true);
       await sendJson(response, { ok: true });
       return;
     }
@@ -131,6 +157,18 @@ const server = http.createServer(async (request, response) => {
         await runNginx("restart");
       }
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/preview") {
+      const site = assertString(url.searchParams.get("site"), "site");
+      const preview = await readSitePreviewImage(site, { refresh: url.searchParams.get("refresh") === "1" });
+      response.writeHead(200, {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-cache",
+        "Last-Modified": preview.updatedAt.toUTCString()
+      });
+      response.end(preview.body);
       return;
     }
 
@@ -309,21 +347,6 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname.startsWith("/api/mongodb/")) {
-      const actionName = url.pathname.split("/").at(-1);
-
-      if (actionName === "port") {
-        const body = await readJson(request);
-        const port = body.port === "auto" ? await findAvailableMongoDbPort() : Number(body.port);
-        await setMongoDbPort(port);
-        await sendJson(response, { ok: true, summary: await getDashboardSummary() });
-        return;
-      }
-
-      await sendJson(response, await runMongoDb(serviceAction(actionName)));
-      return;
-    }
-
     if (request.method === "GET" && url.pathname === "/api/runtimes/jobs") {
       await sendJson(response, { jobs: listRuntimeInstallJobs() });
       return;
@@ -429,6 +452,7 @@ function corsOrigin(origin: string | undefined): string {
 
 server.listen(port, host, () => {
   console.log(`laraboxs helper API listening on http://${host}:${port}`);
+  void ensureDeveloperCommandPath();
 });
 
 async function sendJson(response: http.ServerResponse, value: unknown): Promise<void> {
@@ -564,6 +588,44 @@ function openExternalUrl(url: string): void {
   child.unref();
 }
 
+function openLocalPath(target: string, reveal: boolean): void {
+  const command =
+    process.platform === "win32"
+      ? { file: "explorer.exe", args: reveal ? [`/select,${target}`] : [target] }
+      : process.platform === "darwin"
+        ? { file: "open", args: reveal ? ["-R", target] : [target] }
+        : { file: "xdg-open", args: [target] };
+
+  const child = spawn(command.file, command.args, {
+    detached: true,
+    stdio: "ignore",
+    shell: false,
+    windowsHide: true
+  });
+  child.once("error", () => undefined);
+  child.unref();
+}
+
+function assertGeneralSettings(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Settings are required.");
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    tld: typeof input.tld === "string" ? assertLocalTld(input.tld) : undefined,
+    setupComplete: typeof input.setupComplete === "boolean" ? input.setupComplete : undefined
+  };
+}
+
+function assertLocalTld(value: string): string {
+  const tld = value.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tld)) {
+    throw new Error("Local TLD must use letters, numbers, or hyphens.");
+  }
+  return tld;
+}
+
 function assertPhpSettings(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("PHP settings are required.");
@@ -621,7 +683,7 @@ function serviceAction(value: string | undefined): ServiceAction {
 }
 
 function assertRuntimeKind(value: unknown): RuntimeKind {
-  if (value === "php" || value === "mysql" || value === "nginx" || value === "redis" || value === "mongodb" || value === "node" || value === "composer") {
+  if (value === "php" || value === "mysql" || value === "nginx" || value === "redis" || value === "node" || value === "composer") {
     return value;
   }
   throw new Error(`Unsupported runtime: ${String(value)}`);

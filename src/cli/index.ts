@@ -20,7 +20,6 @@ import {
   runMysql,
   setMysqlVersion
 } from "../core/mysql.js";
-import { findAvailableMongoDbPort, getMongoDbStatus, runMongoDb, setMongoDbPort } from "../core/mongodb.js";
 import { findAvailableRedisPort, getRedisStatus, redisCliCommand, runRedis, setRedisPort } from "../core/redis.js";
 import { loadConfig } from "../core/config.js";
 import { getPaths } from "../core/paths.js";
@@ -265,29 +264,6 @@ async function main(commandName: string, commandArgs: string[]): Promise<number>
       return new Promise((resolve) => child.on("exit", (code) => resolve(code ?? 1)));
     }
 
-    case "mongodb:start":
-      console.log(JSON.stringify(await runMongoDb("start"), null, 2));
-      return 0;
-
-    case "mongodb:stop":
-      console.log(JSON.stringify(await runMongoDb("stop"), null, 2));
-      return 0;
-
-    case "mongodb:restart":
-      console.log(JSON.stringify(await runMongoDb("restart"), null, 2));
-      return 0;
-
-    case "mongodb:status":
-      console.log(JSON.stringify(await getMongoDbStatus(), null, 2));
-      return 0;
-
-    case "mongodb:port": {
-      const requested = commandArgs[0] === "--auto" ? await findAvailableMongoDbPort() : Number(requiredArg(commandArgs[0], "port or --auto"));
-      await setMongoDbPort(requested);
-      console.log(`MongoDB port set to ${requested}.`);
-      return 0;
-    }
-
     case "phpmyadmin:status":
       console.log(JSON.stringify(getPhpMyAdminStatus(), null, 2));
       return 0;
@@ -480,10 +456,10 @@ function parseRuntimeCommandArgs(commandArgs: string[]): { kind: RuntimeKind; ve
 }
 
 function assertRuntimeKind(value: string): RuntimeKind {
-  if (value === "php" || value === "mysql" || value === "nginx" || value === "redis" || value === "mongodb" || value === "node" || value === "composer") {
+  if (value === "php" || value === "mysql" || value === "nginx" || value === "redis" || value === "node" || value === "composer") {
     return value;
   }
-  throw new Error("Runtime must be one of: php, mysql, nginx, redis, mongodb, node, composer.");
+  throw new Error("Runtime must be one of: php, mysql, nginx, redis, node, composer.");
 }
 
 function parsePhpSettings(commandArgs: string[]): Partial<PhpConfig> {
@@ -568,18 +544,17 @@ Usage:
   laraboxs logs
   laraboxs runtimes
   laraboxs install [--force] php <8.4|8.5>
-  laraboxs install [--force] mysql <9.7|8.4|8.0>
+  laraboxs install [--force] mysql <9.7|8.4|8.0|mariadb-11.8.6>
   laraboxs install nginx
   laraboxs install redis
-  laraboxs install mongodb
   laraboxs install node
   laraboxs install composer
   laraboxs uninstall php <8.4|8.5>
-  laraboxs uninstall mysql <9.7|8.4|8.0>
-  laraboxs uninstall nginx|redis|mongodb|node|composer
+  laraboxs uninstall mysql <9.7|8.4|8.0|mariadb-11.8.6>
+  laraboxs uninstall nginx|redis|node|composer
   laraboxs mysql:start|mysql:stop|mysql:restart|mysql:status
   laraboxs mysql:init
-  laraboxs mysql:use <9.7|8.4|8.0>
+  laraboxs mysql:use <9.7|8.4|8.0|mariadb-11.8.6>
   laraboxs mysql:port <port|--auto>
   laraboxs mysql:logs
   laraboxs mysql:create-db <database_name>
@@ -591,8 +566,6 @@ Usage:
   laraboxs redis:start|redis:stop|redis:restart|redis:status
   laraboxs redis:port <port|--auto>
   laraboxs redis:shell
-  laraboxs mongodb:start|mongodb:stop|mongodb:restart|mongodb:status
-  laraboxs mongodb:port <port|--auto>
   laraboxs phpmyadmin:status
   laraboxs phpmyadmin:install [--dry-run-hosts|--no-hosts]
   laraboxs phpmyadmin:open

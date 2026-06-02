@@ -1,9 +1,8 @@
 import { loadConfig } from "./config.js";
 import { readRecentLogs } from "./logging.js";
-import { getMongoDbStatus } from "./mongodb.js";
 import { getMysqlStatus } from "./mysql.js";
 import { getNginxStatus } from "./nginx.js";
-import { getPaths, mongodbDataForVersion, mongodbRootForVersion, mysqlDataForVersion, mysqlRootForVersion, redisDataForVersion, redisRootForVersion } from "./paths.js";
+import { getPaths, mysqlDataForVersion, mysqlRootForVersion, redisDataForVersion, redisRootForVersion } from "./paths.js";
 import { getPhpFastCgiStatus } from "./php.js";
 import { getPhpMyAdminStatus } from "./phpmyadmin.js";
 import { getRedisStatus } from "./redis.js";
@@ -18,7 +17,6 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   const mysql = await getMysqlStatus();
   const php = await getPhpFastCgiStatus();
   const redis = await getRedisStatus();
-  const mongodb = await getMongoDbStatus();
 
   return {
     config,
@@ -28,7 +26,6 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       nginx: { ...getNginxStatus(), port: config.nginx.httpPort },
       mysql,
       redis,
-      mongodb,
       php
     },
     runtimes: getRuntimeStatus(),
@@ -45,8 +42,6 @@ function activeSummaryPaths(config: DashboardSummary["config"]): DashboardSummar
     mysqlRoot: mysqlRootForVersion(config.mysql.version),
     mysqlData: mysqlDataForVersion(config.mysql.version),
     redisRoot: redisRootForVersion(config.redis.version),
-    redisData: redisDataForVersion(config.redis.version),
-    mongodbRoot: mongodbRootForVersion(config.mongodb.version),
-    mongodbData: mongodbDataForVersion(config.mongodb.version)
+    redisData: redisDataForVersion(config.redis.version)
   };
 }

@@ -7,32 +7,39 @@ import { loadConfig } from "./config.js";
 import { getNginxStatus } from "./nginx.js";
 import { getPhpFastCgiStatus, runPhpFastCgi } from "./php.js";
 import { appendLog } from "./logging.js";
-import { getPaths, mongodbRootForVersion, mysqlRootForVersion, redisRootForVersion } from "./paths.js";
+import { getPaths, mysqlRootForVersion, redisRootForVersion } from "./paths.js";
 import { downloadFile, downloadsDir, extractZip, mergeSingleExtractedFolder, runtimeStatus } from "./runtimeInstaller.js";
 import type { RuntimeInstallProgress, RuntimeInstallStatus, RuntimeKind, RuntimeManifestEntry } from "./types.js";
 
 const mysqlVersions = [
   {
+    name: "MySQL",
     version: "9.7",
     packageVersion: "9.7.0",
-    downloadPath: "MySQL-9.7"
+    downloadUrl: "https://cdn.mysql.com/Downloads/MySQL-9.7/mysql-9.7.0-winx64.zip"
   },
   {
+    name: "MySQL",
     version: "8.4",
     packageVersion: "8.4.9",
-    downloadPath: "MySQL-8.4"
+    downloadUrl: "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.9-winx64.zip"
   },
   {
+    name: "MySQL",
     version: "8.0",
     packageVersion: "8.0.46",
-    downloadPath: "MySQL-8.0"
+    downloadUrl: "https://cdn.mysql.com/Downloads/MySQL-8.0/mysql-8.0.46-winx64.zip"
+  },
+  {
+    name: "MariaDB",
+    version: "mariadb-11.8.6",
+    packageVersion: "11.8.6",
+    downloadUrl: "https://archive.mariadb.org/mariadb-11.8.6/winx64-packages/mariadb-11.8.6-winx64.zip"
   }
 ];
 const nginxVersion = "1.31.1";
 const redisVersion = "8.8";
 const redisPackageVersion = "8.8.0";
-const mongodbVersion = "8.2";
-const mongodbPackageVersion = "8.2.0";
 const nodeVersion = "24.16.0";
 const runtimeMarkerFile = ".laraboxs-runtime.json";
 
@@ -72,14 +79,14 @@ export function runtimeManifest(): RuntimeManifestEntry[] {
       root: path.join(paths.phpRoot, "8.5"),
       binary: path.join(paths.phpRoot, "8.5", "php.exe")
     },
-    ...mysqlVersions.map((mysql) => {
-      const root = mysqlRootForVersion(mysql.version);
+    ...mysqlVersions.map((database) => {
+      const root = mysqlRootForVersion(database.version);
       return {
         kind: "mysql" as const,
-        name: "MySQL",
-        version: mysql.version,
-        packageVersion: mysql.packageVersion,
-        downloadUrl: `https://cdn.mysql.com/Downloads/${mysql.downloadPath}/mysql-${mysql.packageVersion}-winx64.zip`,
+        name: database.name,
+        version: database.version,
+        packageVersion: database.packageVersion,
+        downloadUrl: database.downloadUrl,
         archiveType: "zip" as const,
         root,
         binary: path.join(root, "bin", "mysqld.exe")
@@ -104,16 +111,6 @@ export function runtimeManifest(): RuntimeManifestEntry[] {
       archiveType: "zip",
       root: redisRootForVersion(redisVersion),
       binary: path.join(redisRootForVersion(redisVersion), "redis-server.exe")
-    },
-    {
-      kind: "mongodb",
-      name: "MongoDB",
-      version: mongodbVersion,
-      packageVersion: mongodbPackageVersion,
-      downloadUrl: `https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-${mongodbPackageVersion}.zip`,
-      archiveType: "zip",
-      root: mongodbRootForVersion(mongodbVersion),
-      binary: path.join(mongodbRootForVersion(mongodbVersion), "bin", "mongod.exe")
     },
     {
       kind: "node",
@@ -142,7 +139,6 @@ export function getRuntimeStatus(): {
   mysql: RuntimeInstallStatus[];
   nginx: RuntimeInstallStatus;
   redis: RuntimeInstallStatus;
-  mongodb: RuntimeInstallStatus;
   php: RuntimeInstallStatus[];
   node: RuntimeInstallStatus;
   composer: RuntimeInstallStatus;
@@ -151,12 +147,11 @@ export function getRuntimeStatus(): {
   const mysql = entries.filter((entry) => entry.kind === "mysql").map(statusFor);
   const nginx = statusFor(requiredEntry(entries, "nginx"));
   const redis = statusFor(requiredEntry(entries, "redis"));
-  const mongodb = statusFor(requiredEntry(entries, "mongodb"));
   const php = phpRuntimeStatuses(entries);
   const node = statusFor(requiredEntry(entries, "node"));
   const composer = statusFor(requiredEntry(entries, "composer"));
 
-  return { mysql, nginx, redis, mongodb, php, node, composer };
+  return { mysql, nginx, redis, php, node, composer };
 }
 
 export interface InstallRuntimeOptions {
@@ -193,10 +188,6 @@ export async function installRuntime(kind: RuntimeKind, version?: string, option
 
   if (entry.kind === "redis" && options.force && (await isActiveRedisRuntime(entry)) && (await isRedisReachable())) {
     throw new Error("Stop Redis before updating the installed runtime.");
-  }
-
-  if (entry.kind === "mongodb" && options.force && (await isActiveMongoDbRuntime(entry)) && (await isMongoDbReachable())) {
-    throw new Error("Stop MongoDB before updating the installed runtime.");
   }
 
   if (entry.kind === "php" && options.force && (await getPhpFastCgiStatus()).state !== "stopped") {
@@ -259,6 +250,9 @@ export async function installRuntime(kind: RuntimeKind, version?: string, option
   }
 
   await writeRuntimeMarker(entry);
+  if (entry.kind === "node" || entry.kind === "composer") {
+    await ensureDeveloperCommandPath();
+  }
   await appendLog("runtime", `${entry.name} ${entry.version} installed at ${entry.root}`);
   report({
     status: "complete",
@@ -283,10 +277,6 @@ export async function uninstallRuntime(kind: RuntimeKind, version?: string): Pro
     throw new Error("Stop Redis before removing the installed runtime.");
   }
 
-  if (entry.kind === "mongodb" && (await isActiveMongoDbRuntime(entry)) && (await isMongoDbReachable())) {
-    throw new Error("Stop MongoDB before removing the installed runtime.");
-  }
-
   if (entry.kind === "php" && (await getPhpFastCgiStatus()).state !== "stopped") {
     await runPhpFastCgi("stop");
   }
@@ -296,6 +286,126 @@ export async function uninstallRuntime(kind: RuntimeKind, version?: string): Pro
   await rm(runtimeDownloadPath(entry), { force: true });
   await appendLog("runtime", `${entry.name} ${entry.version} removed from ${entry.root}`);
   return statusFor(entry);
+}
+
+export async function ensureDeveloperCommandPath(): Promise<string[]> {
+  const entries = developerCommandPathEntries();
+
+  try {
+    await ensureComposerCommandShims();
+    if (process.platform !== "win32" || shouldSkipPathUpdate()) {
+      return entries;
+    }
+
+    const currentUserPath = readWindowsUserPath();
+    const nextUserPath = mergePathEntries(currentUserPath, entries);
+    if (nextUserPath !== currentUserPath) {
+      writeWindowsUserPath(nextUserPath);
+      appendProcessPath(entries);
+      await appendLog("runtime", `added developer tools to user PATH: ${entries.join("; ")}`);
+    }
+  } catch (error) {
+    await appendLog("runtime", `failed to update developer PATH: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return entries;
+}
+
+export function developerCommandPathEntries(): string[] {
+  const entries = runtimeManifest();
+  const node = requiredEntry(entries, "node");
+  const composer = requiredEntry(entries, "composer");
+  return [node, composer].filter((entry) => existsSync(entry.binary)).map((entry) => entry.root);
+}
+
+export async function ensureComposerCommandShims(): Promise<void> {
+  const composer = findRuntimeEntry("composer");
+  if (!existsSync(composer.binary)) {
+    return;
+  }
+
+  await mkdir(composer.root, { recursive: true });
+  const shim = composerCommandShim();
+  await Promise.all([
+    writeFile(path.join(composer.root, "composer.bat"), shim, "utf8"),
+    writeFile(path.join(composer.root, "composer.cmd"), shim, "utf8")
+  ]);
+}
+
+export function mergePathEntries(currentPath: string, entries: string[]): string {
+  const parts = currentPath
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const preferredEntries = Array.from(new Map(entries.map((entry) => [normalizePathForComparison(entry), entry])).values());
+  const preferred = new Set(preferredEntries.map((entry) => normalizePathForComparison(entry)));
+  const remaining = parts.filter((part) => !preferred.has(normalizePathForComparison(part)));
+  return [...preferredEntries, ...remaining].join(";");
+}
+
+function composerCommandShim(): string {
+  return [
+    "@echo off",
+    "setlocal",
+    "set \"LARABOXS_RUNTIME_HOME=%~dp0..\\..\"",
+    "set \"LARABOXS_PHP=\"",
+    "for /f \"delims=\" %%P in ('dir /b /ad \"%LARABOXS_RUNTIME_HOME%\\runtimes\\php\" 2^>nul ^| sort /r') do (",
+    "  if exist \"%LARABOXS_RUNTIME_HOME%\\runtimes\\php\\%%P\\php.exe\" (",
+    "    set \"LARABOXS_PHP=%LARABOXS_RUNTIME_HOME%\\runtimes\\php\\%%P\\php.exe\"",
+    "    goto laraboxs_php_found",
+    "  )",
+    ")",
+    ":laraboxs_php_found",
+    "if not defined LARABOXS_PHP set \"LARABOXS_PHP=php\"",
+    "\"%LARABOXS_PHP%\" \"%~dp0composer.phar\" %*",
+    "exit /b %ERRORLEVEL%",
+    ""
+  ].join("\r\n");
+}
+
+function readWindowsUserPath(): string {
+  const result = spawnPowerShell("[Environment]::GetEnvironmentVariable('Path', 'User')");
+  return result.stdout.trim();
+}
+
+function writeWindowsUserPath(nextPath: string): void {
+  const script = [
+    "[Environment]::SetEnvironmentVariable('Path', $env:LARABOXS_USER_PATH, 'User')",
+    "$signature = '[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'",
+    "Add-Type -MemberDefinition $signature -Name NativeMethods -Namespace Win32 -ErrorAction SilentlyContinue",
+    "$result = [UIntPtr]::Zero",
+    "[void][Win32.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)"
+  ].join("; ");
+  spawnPowerShell(script, { LARABOXS_USER_PATH: nextPath });
+}
+
+function spawnPowerShell(command: string, env: Record<string, string> = {}): { stdout: string } {
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
+    encoding: "utf8",
+    windowsHide: true,
+    env: { ...process.env, ...env }
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (typeof result.status === "number" && result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `PowerShell exited with ${result.status}`).trim());
+  }
+  return { stdout: result.stdout ?? "" };
+}
+
+function appendProcessPath(entries: string[]): void {
+  const key = process.platform === "win32" ? "Path" : "PATH";
+  const current = process.env[key] ?? process.env.PATH ?? "";
+  process.env[key] = mergePathEntries(current, entries);
+}
+
+function shouldSkipPathUpdate(): boolean {
+  return process.env.VITEST === "true" || process.env.NODE_ENV === "test" || process.env.LARABOXS_SKIP_PATH_UPDATE === "1";
+}
+
+function normalizePathForComparison(value: string): string {
+  return path.resolve(value).replace(/[\\/]+$/g, "").toLowerCase();
 }
 
 export function findRuntimeEntry(kind: RuntimeKind, version?: string): RuntimeManifestEntry {
@@ -483,10 +593,6 @@ function detectInstalledPackageVersion(entry: RuntimeManifestEntry): string | un
       return firstVersion(execRuntimeVersion(entry.binary, ["--version"]), /v=(\d+(?:\.\d+){1,2})/);
     }
 
-    if (entry.kind === "mongodb") {
-      return firstVersion(execRuntimeVersion(entry.binary, ["--version"]), /db version v(\d+(?:\.\d+){1,2})/);
-    }
-
     if (entry.kind === "node") {
       return firstVersion(execRuntimeVersion(entry.binary, ["--version"]), /^v?(\d+(?:\.\d+){1,2})/);
     }
@@ -596,11 +702,6 @@ async function isRedisReachable(): Promise<boolean> {
   return canConnect("127.0.0.1", config.redis.port, 250);
 }
 
-async function isMongoDbReachable(): Promise<boolean> {
-  const config = await loadConfig();
-  return canConnect("127.0.0.1", config.mongodb.port, 250);
-}
-
 async function isActiveMysqlRuntime(entry: RuntimeManifestEntry): Promise<boolean> {
   const config = await loadConfig();
   return config.mysql.version === entry.version;
@@ -609,11 +710,6 @@ async function isActiveMysqlRuntime(entry: RuntimeManifestEntry): Promise<boolea
 async function isActiveRedisRuntime(entry: RuntimeManifestEntry): Promise<boolean> {
   const config = await loadConfig();
   return config.redis.version === entry.version;
-}
-
-async function isActiveMongoDbRuntime(entry: RuntimeManifestEntry): Promise<boolean> {
-  const config = await loadConfig();
-  return config.mongodb.version === entry.version;
 }
 
 function isNginxRunning(): boolean {

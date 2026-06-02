@@ -26,10 +26,6 @@ export interface LaraboxsConfig {
     version: string;
     port: number;
   };
-  mongodb: {
-    version: string;
-    port: number;
-  };
 }
 
 export interface PhpConfig {
@@ -109,7 +105,7 @@ export interface RuntimeInstallStatus {
   updateAvailable?: boolean;
 }
 
-export type RuntimeKind = "php" | "mysql" | "nginx" | "redis" | "mongodb" | "node" | "composer";
+export type RuntimeKind = "php" | "mysql" | "nginx" | "redis" | "node" | "composer";
 export type RuntimeInstallJobStatus = "queued" | "downloading" | "extracting" | "installing" | "complete" | "failed";
 
 export interface RuntimeInstallJob {
@@ -142,8 +138,6 @@ export interface DashboardSummary {
     mysqlData: string;
     redisRoot: string;
     redisData: string;
-    mongodbRoot: string;
-    mongodbData: string;
     hostsFile: string;
   };
   sites: Site[];
@@ -151,14 +145,12 @@ export interface DashboardSummary {
     nginx: ServiceStatus;
     mysql: ServiceStatus;
     redis: ServiceStatus;
-    mongodb: ServiceStatus;
     php: ServiceStatus;
   };
   runtimes: {
     mysql: RuntimeInstallStatus[];
     nginx: RuntimeInstallStatus;
     redis: RuntimeInstallStatus;
-    mongodb: RuntimeInstallStatus;
     php: RuntimeInstallStatus[];
     node: RuntimeInstallStatus;
     composer: RuntimeInstallStatus;

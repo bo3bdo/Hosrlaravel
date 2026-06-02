@@ -9,7 +9,7 @@ import { appendLog } from "./logging.js";
 import { getPaths, mysqlDataForVersion, mysqlRootForVersion, toNginxPath } from "./paths.js";
 import { ensureSecret, readSecret, saveSecret } from "./secretStore.js";
 import { findRuntimeEntry } from "./runtimes.js";
-import type { CommandSpec, ServiceAction, ServiceStatus } from "./types.js";
+import type { CommandSpec, RuntimeManifestEntry, ServiceAction, ServiceStatus } from "./types.js";
 
 const mysqlRootPasswordKey = "mysql-root-password";
 
@@ -34,31 +34,35 @@ export async function ensureMysqlConfigured(): Promise<string> {
 export async function initializeMysqlDataDir(): Promise<ServiceStatus> {
   const password = await ensureMysqlConfigured();
   const config = await loadConfig();
+  const runtime = databaseRuntimeForVersion(config.mysql.version);
+  const databaseName = databaseRuntimeDisplay(runtime);
   const paths = mysqlPathsForVersion(config.mysql.version);
   const marker = path.join(paths.data, "mysql");
 
   if (existsSync(marker)) {
-    return getMysqlStatus("MySQL data directory already initialized.");
+    return getMysqlStatus(`${runtime.name} data directory already initialized.`);
   }
 
   if (isMissingWindowsMysqlBinary(mysqlBinaryPath("mysqld", config.mysql.version))) {
-    const message = `MySQL server binary not found. Install MySQL ${config.mysql.version} from Setup or the MySQL page before initialization.`;
+    const message = `${runtime.name} server binary not found. Install ${databaseName} from Setup or the Database page before initialization.`;
     await appendLog("mysql", message);
     return { name: "mysql", state: "unknown", port: config.mysql.port, version: config.mysql.version, message };
   }
 
   if ((await isDirectoryNonEmpty(paths.data)) && !existsSync(marker)) {
-    throw new Error(`MySQL data directory is not empty but does not look initialized: ${paths.data}`);
+    throw new Error(`${runtime.name} data directory is not empty but does not look initialized: ${paths.data}`);
   }
 
-  const initSpec: CommandSpec = {
-    command: mysqlBinaryPath("mysqld", config.mysql.version),
-    args: [`--defaults-file=${paths.config}`, "--initialize-insecure", `--user=${config.mysql.rootUser}`],
-    cwd: paths.root
-  };
+  const initSpec = isMariaDbRuntime(runtime)
+    ? buildMariaDbInstallDbCommand(config.mysql.version, password)
+    : {
+        command: mysqlBinaryPath("mysqld", config.mysql.version),
+        args: [`--defaults-file=${paths.config}`, "--initialize-insecure", `--user=${config.mysql.rootUser}`],
+        cwd: paths.root
+      };
   const initCode = await runForeground(initSpec);
   if (initCode !== 0) {
-    throw new Error(`mysqld --initialize-insecure exited with code ${initCode}.`);
+    throw new Error(`${runtime.name} initialization exited with code ${initCode}.`);
   }
 
   const child = startBackground({
@@ -71,41 +75,23 @@ export async function initializeMysqlDataDir(): Promise<ServiceStatus> {
   });
 
   await waitForMysql(20_000);
-  await runForeground({
-    command: mysqlBinaryPath("mysql", config.mysql.version),
-    args: [
-      "-h",
-      "127.0.0.1",
-      "-P",
-      String(config.mysql.port),
-      "-u",
-      config.mysql.rootUser,
-      "-e",
-      [
-        `ALTER USER '${config.mysql.rootUser}'@'localhost' IDENTIFIED BY '${escapeSqlString(password)}'`,
-        `CREATE USER IF NOT EXISTS '${config.mysql.rootUser}'@'127.0.0.1' IDENTIFIED BY '${escapeSqlString(password)}'`,
-        `ALTER USER '${config.mysql.rootUser}'@'127.0.0.1' IDENTIFIED BY '${escapeSqlString(password)}'`,
-        `GRANT ALL PRIVILEGES ON *.* TO '${config.mysql.rootUser}'@'127.0.0.1' WITH GRANT OPTION`,
-        "FLUSH PRIVILEGES"
-      ].join("; ")
-    ]
-  });
+  await applyRootPasswordAfterInitialization(password, isMariaDbRuntime(runtime) ? password : undefined);
   await runMysql("stop");
-  await appendLog("mysql", "data directory initialized and root password applied");
-  return getMysqlStatus("MySQL data directory initialized.");
+  await appendLog("mysql", `${runtime.name} data directory initialized and root password applied`);
+  return getMysqlStatus(`${runtime.name} data directory initialized.`);
 }
 
 export async function generateMysqlIni(): Promise<string> {
   const config = await loadConfig();
+  const runtime = databaseRuntimeForVersion(config.mysql.version);
   const paths = mysqlPathsForVersion(config.mysql.version);
 
-  return [
+  const lines = [
     "[mysqld]",
     `basedir=${toNginxPath(paths.root)}`,
     `datadir=${toNginxPath(paths.data)}`,
     `port=${config.mysql.port}`,
     "bind-address=127.0.0.1",
-    "mysqlx-bind-address=127.0.0.1",
     "skip-name-resolve",
     `log-error=${toNginxPath(path.join(getPaths().logs, "mysql-error.log"))}`,
     "",
@@ -113,7 +99,13 @@ export async function generateMysqlIni(): Promise<string> {
     "host=127.0.0.1",
     `port=${config.mysql.port}`,
     `user=${config.mysql.rootUser}`
-  ].join("\n");
+  ];
+
+  if (!isMariaDbRuntime(runtime)) {
+    lines.splice(5, 0, "mysqlx-bind-address=127.0.0.1");
+  }
+
+  return lines.join("\n");
 }
 
 export async function setMysqlPort(port: number): Promise<void> {
@@ -202,7 +194,8 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
 
   if (isMissingWindowsMysqlBinary(command.command)) {
     const config = await loadConfig();
-    const message = `MySQL binary not found. Install MySQL ${config.mysql.version} from Setup or the MySQL page.`;
+    const runtime = databaseRuntimeForVersion(config.mysql.version);
+    const message = `${runtime.name} binary not found. Install ${databaseRuntimeDisplay(runtime)} from Setup or the Database page.`;
     if (action === "stop") {
       await stopAppLocalMysqlProcesses();
       await appendLog("mysql", `${message} Fallback stop requested.`);
@@ -269,7 +262,8 @@ export async function runCreateDatabase(databaseName: string): Promise<ServiceSt
   const command = await createDatabase(databaseName);
   if (isMissingWindowsMysqlBinary(command.command)) {
     const config = await loadConfig();
-    const message = `MySQL client binary not found. Install MySQL ${config.mysql.version} from Setup or the MySQL page.`;
+    const runtime = databaseRuntimeForVersion(config.mysql.version);
+    const message = `${runtime.name} client binary not found. Install ${databaseRuntimeDisplay(runtime)} from Setup or the Database page.`;
     await appendLog("mysql", message);
     return { name: "mysql", state: "unknown", version: config.mysql.version, port: config.mysql.port, message };
   }
@@ -297,7 +291,8 @@ export async function openMysqlShell(): Promise<void> {
   const command = await mysqlShellCommand();
   if (isMissingWindowsMysqlBinary(command.command)) {
     const config = await loadConfig();
-    throw new Error(`MySQL client binary not found. Install MySQL ${config.mysql.version} from Setup or the MySQL page.`);
+    const runtime = databaseRuntimeForVersion(config.mysql.version);
+    throw new Error(`${runtime.name} client binary not found. Install ${databaseRuntimeDisplay(runtime)} from Setup or the Database page.`);
   }
 
   const launcher = mysqlShellLauncherCommand(command);
@@ -379,6 +374,69 @@ export async function laravelEnv(databaseName: string): Promise<string> {
     `DB_USERNAME=${config.mysql.rootUser}`,
     `DB_PASSWORD=${password}`
   ].join("\n");
+}
+
+function databaseRuntimeForVersion(version: string): RuntimeManifestEntry {
+  return findRuntimeEntry("mysql", version);
+}
+
+function isMariaDbRuntime(runtime: RuntimeManifestEntry): boolean {
+  return runtime.name === "MariaDB";
+}
+
+function databaseRuntimeDisplay(runtime: RuntimeManifestEntry): string {
+  return `${runtime.name} ${databaseDisplayVersion(runtime.version)}`;
+}
+
+function databaseDisplayVersion(version: string): string {
+  return version.toLowerCase().startsWith("mariadb-") ? version.slice("mariadb-".length) : version;
+}
+
+function buildMariaDbInstallDbCommand(version: string, password: string): CommandSpec {
+  const paths = mysqlPathsForVersion(version);
+  return {
+    command: mariaDbInstallDbPath(version),
+    args: [`--basedir=${paths.root}`, `--datadir=${paths.data}`, `--password=${password}`],
+    cwd: paths.root
+  };
+}
+
+function mariaDbInstallDbPath(version: string): string {
+  const root = mysqlRootForVersion(version);
+  const extension = process.platform === "win32" ? ".exe" : "";
+  for (const binary of [`mariadb-install-db${extension}`, `mysql_install_db${extension}`]) {
+    const candidate = path.join(root, "bin", binary);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return path.join(root, "bin", `mariadb-install-db${extension}`);
+}
+
+async function applyRootPasswordAfterInitialization(password: string, connectPassword?: string): Promise<void> {
+  const config = await loadConfig();
+  const rootUser = escapeSqlString(config.mysql.rootUser);
+  const rootPassword = escapeSqlString(password);
+  await runForeground({
+    command: mysqlBinaryPath("mysql", config.mysql.version),
+    args: [
+      "-h",
+      "127.0.0.1",
+      "-P",
+      String(config.mysql.port),
+      "-u",
+      config.mysql.rootUser,
+      "-e",
+      [
+        `ALTER USER '${rootUser}'@'localhost' IDENTIFIED BY '${rootPassword}'`,
+        `CREATE USER IF NOT EXISTS '${rootUser}'@'127.0.0.1' IDENTIFIED BY '${rootPassword}'`,
+        `ALTER USER '${rootUser}'@'127.0.0.1' IDENTIFIED BY '${rootPassword}'`,
+        `GRANT ALL PRIVILEGES ON *.* TO '${rootUser}'@'127.0.0.1' WITH GRANT OPTION`,
+        "FLUSH PRIVILEGES"
+      ].join("; ")
+    ],
+    env: connectPassword ? { MYSQL_PWD: connectPassword } : undefined
+  });
 }
 
 function generateRootPassword(): string {

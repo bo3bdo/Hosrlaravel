@@ -45,6 +45,16 @@ describe("mysql command logic", () => {
     expect(ini).toContain(path.join("services", "mysql", "8.0", "data").replace(/\\/g, "/"));
   });
 
+  it("generates MariaDB config for the selected runtime", async () => {
+    await setMysqlPort(43308);
+    await setMysqlVersion("mariadb-11.8.6");
+    const ini = await generateMysqlIni();
+
+    expect(ini).toContain(path.join("services", "mariadb", "11.8.6").replace(/\\/g, "/"));
+    expect(ini).toContain(path.join("services", "mariadb", "11.8.6", "data").replace(/\\/g, "/"));
+    expect(ini).not.toContain("mysqlx-bind-address");
+  });
+
   it("uses MYSQL_PWD instead of exposing passwords in command arguments", async () => {
     await ensureMysqlConfigured();
     const command = await createDatabase("app_name");

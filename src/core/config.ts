@@ -43,7 +43,6 @@ const defaultPhpExtensions = [
   "xsl",
   "redis",
   "imagick",
-  "mongodb",
   "pgsql",
   "pdo_pgsql",
   "sqlsrv",
@@ -83,10 +82,6 @@ export function defaultConfig(): LaraboxsConfig {
     redis: {
       version: "8.8",
       port: 6379
-    },
-    mongodb: {
-      version: "8.2",
-      port: 27017
     }
   };
 }
@@ -158,10 +153,6 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
     redis: {
       ...defaults.redis,
       ...(input.redis ?? {})
-    },
-    mongodb: {
-      ...defaults.mongodb,
-      ...(input.mongodb ?? {})
     }
   };
 }

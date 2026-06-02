@@ -14,13 +14,11 @@ describe("log aggregation", () => {
     await appendLog("mysql", "start requested");
     await writeFile(path.join(getPaths().logs, "mysql-error.log"), "mysqld error line\n", "utf8");
     await writeFile(path.join(getPaths().logs, "nginx-error.log"), "nginx error line\n", "utf8");
-    await writeFile(path.join(getPaths().logs, "mongodb.log"), "mongodb error line\n", "utf8");
 
     const logs = await readRecentLogs();
 
     expect(logs.some((line) => line.includes("[mysql] start requested"))).toBe(true);
     expect(logs).toContain("[mysql] mysqld error line");
     expect(logs).toContain("[nginx] nginx error line");
-    expect(logs).toContain("[mongodb] mongodb error line");
   });
 });

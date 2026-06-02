@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  Clipboard,
   Database,
   Download,
   ExternalLink,
@@ -12,24 +13,29 @@ import {
   FolderOpen,
   FolderPlus,
   Globe,
+  HardDrive,
   KeyRound,
   ListRestart,
   LoaderCircle,
   Lock,
   LockOpen,
+  Network,
   PackageCheck,
   Play,
   RotateCw,
+  Save,
   Server,
   Settings,
+  Shield,
   ShieldCheck,
+  SlidersHorizontal,
   SquareTerminal,
   Trash2
 } from "lucide-react";
 import type { DashboardSummary, PhpConfig, PhpExtensionStatus, PhpSettingsStatus, RuntimeInstallJob, RuntimeInstallStatus, RuntimeKind, ServiceStatus, Site } from "./types.js";
 
 type Section = "sites" | "services" | "logs" | "settings";
-type ServicesPane = "mysql" | "redis" | "mongodb" | "phpmyadmin" | "php" | "nginx" | "all";
+type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
 type RuntimeJobMap = Record<string, RuntimeInstallJob>;
 type WizardStepId = "folder" | "install" | "finish";
 type WizardTaskStatus = "pending" | "running" | "complete" | "failed";
@@ -274,7 +280,7 @@ export default function App() {
               <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
             ) : null}
             {section === "logs" ? <Logs summary={summary} /> : null}
-            {section === "settings" ? <SettingsView summary={summary} /> : null}
+            {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} /> : null}
           </section>
         )}
       </main>
@@ -334,11 +340,13 @@ function FirstRunWizard({
   const [running, setRunning] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
   const [wizardWarning, setWizardWarning] = useState<string | null>(null);
+  const [mysqlVersion, setMysqlVersion] = useState(summary.config.mysql.version);
 
   const phpRuntime = preferredRuntime(summary.runtimes.php);
-  const mysqlRuntime = preferredRuntime(summary.runtimes.mysql);
+  const mysqlRuntime = selectedMysqlRuntime(summary, mysqlVersion) ?? selectedMysqlRuntime(summary, summary.config.mysql.version) ?? summary.runtimes.mysql[0];
   const phpVersion = phpRuntime?.version ?? summary.config.globalPhpVersion;
-  const mysqlVersion = mysqlRuntime?.version ?? summary.config.mysql.version;
+  const selectedDatabaseLabel = databaseRuntimeDisplay(mysqlRuntime);
+  const mysqlVersionsKey = summary.runtimes.mysql.map((runtime) => runtime.version).join("|");
   const canStart = sitesFolder.trim().length > 0;
   const steps: Array<{ id: WizardStepId; label: string; detail: string }> = [
     { id: "folder", label: "Sites", detail: pathTail(sitesFolder) || "Choose folder" },
@@ -368,6 +376,12 @@ function FirstRunWizard({
       [id]: { status, message }
     }));
   }
+
+  useEffect(() => {
+    if (summary.runtimes.mysql.length && !summary.runtimes.mysql.some((runtime) => runtime.version === mysqlVersion)) {
+      setMysqlVersion(summary.config.mysql.version);
+    }
+  }, [mysqlVersion, mysqlVersionsKey, summary.config.mysql.version, summary.runtimes.mysql]);
 
   async function runSetup() {
     if (!canStart) {
@@ -416,9 +430,6 @@ function FirstRunWizard({
                   break;
                 case "redis-start":
                   await request("/api/redis/start");
-                  break;
-                case "mongodb-start":
-                  await request("/api/mongodb/start");
                   break;
                 case "nginx-start":
                   await request("/api/nginx/start");
@@ -529,10 +540,14 @@ function FirstRunWizard({
 
               <div className="wizard-stack-preview">
                 <StackPreviewItem icon={SquareTerminal} title={`PHP ${phpVersion}`} runtime={phpRuntime} />
-                <StackPreviewItem icon={Database} title={`MySQL ${mysqlVersion}`} runtime={mysqlRuntime} />
+                <StackPreviewItem icon={Database} title={selectedDatabaseLabel} runtime={mysqlRuntime} />
                 <StackPreviewItem icon={Server} title={`Nginx ${summary.runtimes.nginx.version}`} runtime={summary.runtimes.nginx} />
                 <StackPreviewItem icon={PackageCheck} title="Composer stable" runtime={summary.runtimes.composer} />
                 <StackPreviewItem icon={SquareTerminal} title={`Node.js ${summary.runtimes.node.version}`} runtime={summary.runtimes.node} />
+              </div>
+              <div className="wizard-runtime-choice">
+                <span className="eyebrow">Database</span>
+                <RuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
               </div>
             </div>
           ) : null}
@@ -568,7 +583,7 @@ function FirstRunWizard({
               <div>
                 <span className="eyebrow">Complete</span>
                 <h2>The local development stack is ready.</h2>
-                <p>{pathTail(sitesFolder) || "Sites"} is parked with PHP {phpVersion}, Nginx, MySQL {mysqlVersion}, Composer, and Node.js.</p>
+                <p>{pathTail(sitesFolder) || "Sites"} is parked with PHP {phpVersion}, Nginx, {selectedDatabaseLabel}, Composer, and Node.js.</p>
               </div>
             </div>
           ) : null}
@@ -733,23 +748,26 @@ function firstRunTaskDefinitions(
     sitesFolder: string;
   }
 ): WizardTaskDefinition[] {
+  const databaseRuntime = selectedMysqlRuntime(summary, options.mysqlVersion);
+  const databaseLabel = databaseRuntimeDisplay(databaseRuntime);
+  const databaseName = databaseEngineName(databaseRuntime);
   const tasks: WizardTaskDefinition[] = [
     { id: "park", label: "Park sites folder", detail: options.sitesFolder },
-    { id: "configure", label: "Apply selected versions", detail: `Use PHP ${options.phpVersion} and MySQL ${options.mysqlVersion}` },
+    { id: "configure", label: "Apply selected versions", detail: `Use PHP ${options.phpVersion} and ${databaseLabel}` },
     { id: `php-${options.phpVersion}`, label: `Prepare PHP ${options.phpVersion}`, detail: "Download PHP CLI and FastCGI", runtime: { kind: "php", version: options.phpVersion } },
     { id: "nginx", label: "Prepare Nginx", detail: "Download the local web server", runtime: { kind: "nginx", version: summary.runtimes.nginx.version } },
-    { id: `mysql-${options.mysqlVersion}`, label: `Prepare MySQL ${options.mysqlVersion}`, detail: "Download the database runtime", runtime: { kind: "mysql", version: options.mysqlVersion } },
+    { id: `mysql-${options.mysqlVersion}`, label: `Prepare ${databaseLabel}`, detail: "Download the database runtime", runtime: { kind: "mysql", version: options.mysqlVersion } },
     { id: "composer", label: "Prepare Composer", detail: "Install Composer for Laravel packages", runtime: { kind: "composer", version: summary.runtimes.composer.version } },
     { id: "node", label: "Prepare Node.js", detail: "Install frontend tooling runtime", runtime: { kind: "node", version: summary.runtimes.node.version } }
   ];
 
-  tasks.push({ id: "mysql-init", label: "Initialize MySQL", detail: "Create data directory and root password" });
+  tasks.push({ id: "mysql-init", label: `Initialize ${databaseName}`, detail: "Create data directory and root password" });
   if (!summary.phpMyAdmin.installed) {
     tasks.push({ id: "phpmyadmin", label: "Install phpMyAdmin", detail: "Create the database admin site", optional: true });
   }
   tasks.push(
     { id: "php-start", label: "Start PHP FastCGI", detail: "Launch the selected PHP worker" },
-    { id: "mysql-start", label: "Start MySQL", detail: "Start the local database service" }
+    { id: "mysql-start", label: `Start ${databaseName}`, detail: "Start the local database service" }
   );
   tasks.push(
     { id: "nginx-start", label: "Start Nginx", detail: "Serve local sites" },
@@ -787,8 +805,6 @@ function selectedRuntimeStatus(summary: DashboardSummary, kind: RuntimeKind, ver
       return summary.runtimes.nginx;
     case "redis":
       return summary.runtimes.redis;
-    case "mongodb":
-      return summary.runtimes.mongodb;
     case "node":
       return summary.runtimes.node;
     case "composer":
@@ -802,6 +818,18 @@ function selectedPhpRuntime(summary: DashboardSummary, version: string): Runtime
 
 function selectedMysqlRuntime(summary: DashboardSummary, version: string): RuntimeInstallStatus | undefined {
   return summary.runtimes.mysql.find((runtime) => runtime.version === version) ?? summary.runtimes.mysql[0];
+}
+
+function databaseRuntimeDisplay(runtime?: RuntimeInstallStatus): string {
+  return runtime ? `${databaseEngineName(runtime)} ${databaseVersionDisplay(runtime.version)}` : "Database";
+}
+
+function databaseEngineName(runtime?: RuntimeInstallStatus): string {
+  return runtime?.name === "MariaDB" ? "MariaDB" : "MySQL";
+}
+
+function databaseVersionDisplay(version: string): string {
+  return version.toLowerCase().startsWith("mariadb-") ? version.slice("mariadb-".length) : version;
 }
 
 function preferredRuntime(items: RuntimeInstallStatus[]): RuntimeInstallStatus | undefined {
@@ -860,38 +888,44 @@ function Services({
   const [mysqlVersion, setMysqlVersion] = useState(summary.config.mysql.version);
   const [mysqlPort, setMysqlPort] = useState(String(summary.config.mysql.port));
   const [redisPort, setRedisPort] = useState(String(summary.config.redis.port));
-  const [mongodbPort, setMongoDbPort] = useState(String(summary.config.mongodb.port));
   const [servicesPane, setServicesPane] = useState<ServicesPane>("mysql");
   const [databaseName, setDatabaseName] = useState("app_name");
   const [envText, setEnvText] = useState("");
   const [rootPassword, setRootPassword] = useState("");
   const [showRootPassword, setShowRootPassword] = useState(false);
   const [newRootPassword, setNewRootPassword] = useState("");
+  const [phpSettings, setPhpSettings] = useState<PhpConfig>(summary.config.php);
+  const [phpExtensions, setPhpExtensions] = useState<PhpExtensionStatus[]>([]);
+  const [phpIniPath, setPhpIniPath] = useState("");
+  const [phpSettingsLoading, setPhpSettingsLoading] = useState(false);
+  const [phpSettingsSaving, setPhpSettingsSaving] = useState(false);
   const jobs = Object.values(installJobs);
   const phpRuntime = summary.runtimes.php.find((runtime) => runtime.version === phpVersion) ?? summary.runtimes.php[0];
   const mysqlRuntime = summary.runtimes.mysql.find((runtime) => runtime.version === mysqlVersion) ?? summary.runtimes.mysql[0];
+  const activeMysqlRuntime = selectedMysqlRuntime(summary, summary.config.mysql.version);
+  const activeDatabaseName = databaseEngineName(activeMysqlRuntime);
+  const activeDatabaseLabel = databaseRuntimeDisplay(activeMysqlRuntime);
+  const selectedDatabaseName = databaseEngineName(mysqlRuntime);
+  const selectedDatabaseLabel = databaseRuntimeDisplay(mysqlRuntime);
   const phpJob = phpRuntime ? latestRuntimeJob(jobs, "php", phpRuntime.version) : undefined;
   const mysqlJob = mysqlRuntime ? latestRuntimeJob(jobs, "mysql", mysqlRuntime.version) : undefined;
   const nginxJob = latestRuntimeJob(jobs, "nginx", summary.runtimes.nginx.version);
   const redisJob = latestRuntimeJob(jobs, "redis", summary.runtimes.redis.version);
-  const mongodbJob = latestRuntimeJob(jobs, "mongodb", summary.runtimes.mongodb.version);
   const phpVersionsKey = summary.runtimes.php.map((runtime) => runtime.version).join("|");
   const mysqlVersionsKey = summary.runtimes.mysql.map((runtime) => runtime.version).join("|");
-  const runningServices = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis, summary.services.mongodb].filter(
+  const runningServices = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter(
     (service) => service.state === "running"
   ).length;
   const showPhp = servicesPane === "php" || servicesPane === "all";
   const showNginx = servicesPane === "nginx" || servicesPane === "all";
   const showMysql = servicesPane === "mysql" || servicesPane === "all";
   const showRedis = servicesPane === "redis" || servicesPane === "all";
-  const showMongoDb = servicesPane === "mongodb" || servicesPane === "all";
   const showPhpMyAdmin = servicesPane === "phpmyadmin" || servicesPane === "all";
 
   useEffect(() => {
     setMysqlPort(String(summary.config.mysql.port));
     setRedisPort(String(summary.config.redis.port));
-    setMongoDbPort(String(summary.config.mongodb.port));
-  }, [summary.config.mysql.port, summary.config.redis.port, summary.config.mongodb.port]);
+  }, [summary.config.mysql.port, summary.config.redis.port]);
 
   useEffect(() => {
     if (summary.runtimes.php.length && !summary.runtimes.php.some((runtime) => runtime.version === phpVersion)) {
@@ -904,6 +938,47 @@ function Services({
       setMysqlVersion(summary.config.mysql.version);
     }
   }, [mysqlVersion, mysqlVersionsKey, summary.config.mysql.version, summary.runtimes.mysql]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPhpSettings() {
+      setPhpSettingsLoading(true);
+      try {
+        const response = await fetch(apiUrl(`/api/php/settings?version=${encodeURIComponent(phpVersion)}`));
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const payload = (await response.json()) as PhpSettingsStatus;
+        if (!cancelled) {
+          setPhpSettings(payload.settings);
+          setPhpExtensions(payload.extensions);
+          setPhpIniPath(payload.iniPath);
+        }
+      } catch {
+        if (!cancelled) {
+          setPhpSettings(summary.config.php);
+          setPhpExtensions([]);
+          setPhpIniPath("");
+        }
+      } finally {
+        if (!cancelled) {
+          setPhpSettingsLoading(false);
+        }
+      }
+    }
+
+    void loadPhpSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    phpVersion,
+    summary.config.php.memoryLimit,
+    summary.config.php.uploadMaxFilesize,
+    summary.config.php.postMaxSize,
+    summary.config.php.maxExecutionTime,
+    summary.config.php.maxInputVars,
+    summary.config.php.enabledExtensions.join("|")
+  ]);
 
   async function useMysqlVersion() {
     if (summary.services.mysql.state === "running") {
@@ -924,7 +999,7 @@ function Services({
   }
 
   async function resetRootPassword() {
-    if (!window.confirm("Reset MySQL root password?")) {
+    if (!window.confirm(`Reset ${activeDatabaseName} root password?`)) {
       return;
     }
     const payload = (await request("/api/mysql/reset-password")) as { password?: string };
@@ -940,20 +1015,44 @@ function Services({
     setShowRootPassword(true);
   }
 
+  function updatePhpSetting(patch: Partial<PhpConfig>) {
+    setPhpSettings((current) => ({ ...current, ...patch }));
+  }
+
+  function togglePhpExtension(name: string) {
+    setPhpSettings((current) => {
+      const enabled = new Set(current.enabledExtensions);
+      if (enabled.has(name)) {
+        enabled.delete(name);
+      } else {
+        enabled.add(name);
+      }
+      return { ...current, enabledExtensions: Array.from(enabled).sort() };
+    });
+  }
+
+  async function savePhpSettings() {
+    setPhpSettingsSaving(true);
+    try {
+      await post("/api/php/settings", { settings: phpSettings });
+    } finally {
+      setPhpSettingsSaving(false);
+    }
+  }
+
   return (
     <div className="services-view">
       <div className="services-overview">
-        <ServiceSnapshot icon={Play} label="Running" value={`${runningServices}/5`} detail="core services" tone={runningServices === 5 ? "green" : runningServices > 0 ? "amber" : "red"} />
+        <ServiceSnapshot icon={Play} label="Running" value={`${runningServices}/4`} detail="core services" tone={runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red"} />
         <ServiceSnapshot icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} detail={`${summary.runtimes.php.length} versions`} tone={summary.services.php.state === "running" ? "green" : "amber"} />
-        <ServiceSnapshot icon={Database} label="Databases" value={summary.services.mysql.state} detail={`MySQL ${summary.config.mysql.version} · Redis · MongoDB`} tone={summary.services.mysql.state === "running" ? "green" : "amber"} />
+        <ServiceSnapshot icon={Database} label="Databases" value={summary.services.mysql.state} detail={`${activeDatabaseLabel} · Redis`} tone={summary.services.mysql.state === "running" ? "green" : "amber"} />
         <ServiceSnapshot icon={Server} label="Web Server" value={summary.services.nginx.state} detail={`HTTP ${summary.config.nginx.httpPort} / HTTPS ${summary.config.nginx.httpsPort}`} tone={summary.services.nginx.state === "running" ? "green" : "amber"} />
       </div>
 
       <div className="services-workbench">
         <aside className="services-list" aria-label="Service list">
-          <ServiceNavButton icon={Database} label="MySQL" detail={`:${summary.config.mysql.port}`} service={summary.services.mysql} active={servicesPane === "mysql"} onClick={() => setServicesPane("mysql")} />
+          <ServiceNavButton icon={Database} label={activeDatabaseName} detail={`:${summary.config.mysql.port}`} service={summary.services.mysql} active={servicesPane === "mysql"} onClick={() => setServicesPane("mysql")} />
           <ServiceNavButton icon={Database} label="Redis" detail={`:${summary.config.redis.port}`} service={summary.services.redis} active={servicesPane === "redis"} onClick={() => setServicesPane("redis")} />
-          <ServiceNavButton icon={Database} label="MongoDB" detail={`:${summary.config.mongodb.port}`} service={summary.services.mongodb} active={servicesPane === "mongodb"} onClick={() => setServicesPane("mongodb")} />
           <ServiceNavButton
             icon={Database}
             label="phpMyAdmin"
@@ -968,12 +1067,13 @@ function Services({
           />
           <ServiceNavButton icon={SquareTerminal} label="PHP" detail={summary.config.globalPhpVersion} service={summary.services.php} active={servicesPane === "php"} onClick={() => setServicesPane("php")} />
           <ServiceNavButton icon={Server} label="Nginx" detail={`:${summary.config.nginx.httpPort}`} service={summary.services.nginx} active={servicesPane === "nginx"} onClick={() => setServicesPane("nginx")} />
-          <button className={servicesPane === "all" ? "service-nav-item active" : "service-nav-item"} onClick={() => setServicesPane("all")}>
+          <button className={servicesPane === "all" ? "service-nav-item active" : "service-nav-item"} onClick={() => setServicesPane("all")} title="All Services - full stack view">
             <ListRestart size={17} />
             <div>
               <strong>All Services</strong>
               <span>full stack view</span>
             </div>
+            <span className="status-dot amber" title="overview" />
           </button>
         </aside>
 
@@ -992,6 +1092,7 @@ function Services({
           <div className="service-actions">
             {phpRuntime ? (
               <button
+                title={runtimeActionLabel(phpRuntime, phpJob, "Install PHP")}
                 className={!phpRuntime.installed || phpRuntime.updateAvailable ? "primary" : ""}
                 disabled={busy || (phpRuntime.installed && !phpRuntime.updateAvailable) || Boolean(phpJob && isActiveRuntimeJob(phpJob))}
                 onClick={() => void startRuntimeInstall("php", phpRuntime.version, Boolean(phpRuntime.updateAvailable))}
@@ -1000,22 +1101,73 @@ function Services({
                 <span>{runtimeActionLabel(phpRuntime, phpJob, "Install")}</span>
               </button>
             ) : null}
-            <button className="primary" disabled={busy || !phpRuntime?.installed || phpVersion === summary.config.globalPhpVersion} onClick={() => void post("/api/php/use", { version: phpVersion })}>
+            <button className="primary" title="Use selected PHP" disabled={busy || !phpRuntime?.installed || phpVersion === summary.config.globalPhpVersion} onClick={() => void post("/api/php/use", { version: phpVersion })}>
               <BadgeCheck size={18} />
               <span>Use</span>
             </button>
-            <button disabled={busy || summary.services.php.state === "running"} onClick={() => void post("/api/php-fcgi/start")}>
+            <button title="Start PHP" disabled={busy || summary.services.php.state === "running"} onClick={() => void post("/api/php-fcgi/start")}>
               <Play size={18} />
               <span>Start</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/php-fcgi/stop")}>
+            <button title="Stop PHP" disabled={busy} onClick={() => void post("/api/php-fcgi/stop")}>
               <CircleStop size={18} />
               <span>Stop</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/php-fcgi/restart")}>
+            <button title="Restart PHP" disabled={busy} onClick={() => void post("/api/php-fcgi/restart")}>
               <RotateCw size={18} />
               <span>Restart</span>
             </button>
+          </div>
+        </div>
+        ) : null}
+
+        {showPhp ? (
+        <div className="service-panel wide-service-panel php-settings-service-panel">
+          <ServiceHeader icon={Settings} title="PHP Settings" service={summary.services.php} detail={phpIniPath || `PHP ${phpVersion}`} />
+          <div className="settings-grid">
+            <label>
+              <span>memory_limit</span>
+              <input value={phpSettings.memoryLimit} onChange={(event) => updatePhpSetting({ memoryLimit: event.target.value })} />
+            </label>
+            <label>
+              <span>upload_max_filesize</span>
+              <input value={phpSettings.uploadMaxFilesize} onChange={(event) => updatePhpSetting({ uploadMaxFilesize: event.target.value })} />
+            </label>
+            <label>
+              <span>post_max_size</span>
+              <input value={phpSettings.postMaxSize} onChange={(event) => updatePhpSetting({ postMaxSize: event.target.value })} />
+            </label>
+            <label>
+              <span>max_execution_time</span>
+              <input type="number" min="0" value={phpSettings.maxExecutionTime} onChange={(event) => updatePhpSetting({ maxExecutionTime: Number(event.target.value) })} />
+            </label>
+            <label>
+              <span>max_input_vars</span>
+              <input type="number" min="0" value={phpSettings.maxInputVars} onChange={(event) => updatePhpSetting({ maxInputVars: Number(event.target.value) })} />
+            </label>
+          </div>
+          <div className="service-actions">
+            <button className="primary" title="Save PHP settings and restart" disabled={busy || phpSettingsSaving || phpSettingsLoading} onClick={() => void savePhpSettings()}>
+              <BadgeCheck size={18} />
+              <span>Save</span>
+            </button>
+          </div>
+          <div className="extensions-grid compact-extensions-grid">
+            {phpExtensions.length ? (
+              phpExtensions.map((extension) => (
+                <label key={extension.name} className={!extension.available ? "extension-toggle unavailable" : "extension-toggle"} title={extension.available ? extension.name : `${extension.name} unavailable`}>
+                  <input
+                    type="checkbox"
+                    checked={phpSettings.enabledExtensions.includes(extension.name)}
+                    disabled={!extension.available || phpSettingsSaving || phpSettingsLoading}
+                    onChange={() => togglePhpExtension(extension.name)}
+                  />
+                  <span>{extension.name}</span>
+                </label>
+              ))
+            ) : (
+              <span className="muted">{phpSettingsLoading ? "Loading extensions..." : "No extensions found."}</span>
+            )}
           </div>
         </div>
         ) : null}
@@ -1027,6 +1179,7 @@ function Services({
           {nginxJob && (isActiveRuntimeJob(nginxJob) || nginxJob.status === "failed") ? <RuntimeProgress job={nginxJob} /> : null}
           <div className="service-actions">
             <button
+              title={runtimeActionLabel(summary.runtimes.nginx, nginxJob, "Install Nginx")}
               className={!summary.runtimes.nginx.installed || summary.runtimes.nginx.updateAvailable ? "primary" : ""}
               disabled={busy || (summary.runtimes.nginx.installed && !summary.runtimes.nginx.updateAvailable) || Boolean(nginxJob && isActiveRuntimeJob(nginxJob))}
               onClick={() => void startRuntimeInstall("nginx", summary.runtimes.nginx.version, Boolean(summary.runtimes.nginx.updateAvailable))}
@@ -1034,15 +1187,15 @@ function Services({
               <Download size={18} />
               <span>{runtimeActionLabel(summary.runtimes.nginx, nginxJob, "Install")}</span>
             </button>
-            <button disabled={busy || summary.services.nginx.state === "running"} onClick={() => void post("/api/nginx/start")}>
+            <button title="Start Nginx" disabled={busy || summary.services.nginx.state === "running"} onClick={() => void post("/api/nginx/start")}>
               <Play size={18} />
               <span>Start</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/nginx/stop")}>
+            <button title="Stop Nginx" disabled={busy} onClick={() => void post("/api/nginx/stop")}>
               <CircleStop size={18} />
               <span>Stop</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/nginx/restart")}>
+            <button title="Restart Nginx" disabled={busy} onClick={() => void post("/api/nginx/restart")}>
               <RotateCw size={18} />
               <span>Restart</span>
             </button>
@@ -1052,12 +1205,13 @@ function Services({
 
         {showMysql ? (
         <div className="service-panel wide-service-panel">
-          <ServiceHeader icon={Database} title="MySQL" service={summary.services.mysql} detail={`127.0.0.1:${summary.config.mysql.port}`} />
+          <ServiceHeader icon={Database} title={activeDatabaseName} service={summary.services.mysql} detail={`${activeDatabaseLabel} · 127.0.0.1:${summary.config.mysql.port}`} />
           <RuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
           {mysqlJob && (isActiveRuntimeJob(mysqlJob) || mysqlJob.status === "failed") ? <RuntimeProgress job={mysqlJob} /> : null}
           <div className="service-actions">
             {mysqlRuntime ? (
               <button
+                title={runtimeActionLabel(mysqlRuntime, mysqlJob, `Install ${selectedDatabaseLabel}`)}
                 className={!mysqlRuntime.installed || mysqlRuntime.updateAvailable ? "primary" : ""}
                 disabled={busy || (mysqlRuntime.installed && !mysqlRuntime.updateAvailable) || Boolean(mysqlJob && isActiveRuntimeJob(mysqlJob))}
                 onClick={() => void startRuntimeInstall("mysql", mysqlRuntime.version, Boolean(mysqlRuntime.updateAvailable))}
@@ -1066,38 +1220,38 @@ function Services({
                 <span>{runtimeActionLabel(mysqlRuntime, mysqlJob, "Install")}</span>
               </button>
             ) : null}
-            <button className="primary" disabled={busy || !mysqlRuntime?.installed || mysqlVersion === summary.config.mysql.version} onClick={() => void useMysqlVersion()}>
+            <button className="primary" title={`Use selected ${selectedDatabaseName}`} disabled={busy || !mysqlRuntime?.installed || mysqlVersion === summary.config.mysql.version} onClick={() => void useMysqlVersion()}>
               <BadgeCheck size={18} />
               <span>Use</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/mysql/init")}>
+            <button title={`Initialize ${activeDatabaseName}`} disabled={busy} onClick={() => void post("/api/mysql/init")}>
               <BadgeCheck size={18} />
               <span>Initialize</span>
             </button>
-            <button disabled={busy || summary.services.mysql.state === "running"} onClick={() => void post("/api/mysql/start")}>
+            <button title={`Start ${activeDatabaseName}`} disabled={busy || summary.services.mysql.state === "running"} onClick={() => void post("/api/mysql/start")}>
               <Play size={18} />
               <span>Start</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/mysql/stop")}>
+            <button title={`Stop ${activeDatabaseName}`} disabled={busy} onClick={() => void post("/api/mysql/stop")}>
               <CircleStop size={18} />
               <span>Stop</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/mysql/restart")}>
+            <button title={`Restart ${activeDatabaseName}`} disabled={busy} onClick={() => void post("/api/mysql/restart")}>
               <RotateCw size={18} />
               <span>Restart</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/mysql/shell")}>
+            <button title={`Open ${activeDatabaseName} shell`} disabled={busy} onClick={() => void post("/api/mysql/shell")}>
               <SquareTerminal size={18} />
               <span>Shell</span>
             </button>
           </div>
           <div className="service-inline-settings">
             <input value={mysqlPort} onChange={(event) => setMysqlPort(event.target.value)} inputMode="numeric" />
-            <button disabled={busy || !mysqlPort.trim()} onClick={() => void post("/api/mysql/port", { port: Number(mysqlPort) })}>
+            <button title={`Set ${activeDatabaseName} port`} disabled={busy || !mysqlPort.trim()} onClick={() => void post("/api/mysql/port", { port: Number(mysqlPort) })}>
               <Settings size={18} />
               <span>Set Port</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/mysql/port", { port: "auto" })}>
+            <button title={`Auto ${activeDatabaseName} port`} disabled={busy} onClick={() => void post("/api/mysql/port", { port: "auto" })}>
               <RotateCw size={18} />
               <span>Auto</span>
             </button>
@@ -1112,6 +1266,7 @@ function Services({
           {redisJob && (isActiveRuntimeJob(redisJob) || redisJob.status === "failed") ? <RuntimeProgress job={redisJob} /> : null}
           <div className="service-actions">
             <button
+              title={runtimeActionLabel(summary.runtimes.redis, redisJob, "Install Redis")}
               className={!summary.runtimes.redis.installed || summary.runtimes.redis.updateAvailable ? "primary" : ""}
               disabled={busy || (summary.runtimes.redis.installed && !summary.runtimes.redis.updateAvailable) || Boolean(redisJob && isActiveRuntimeJob(redisJob))}
               onClick={() => void startRuntimeInstall("redis", summary.runtimes.redis.version, Boolean(summary.runtimes.redis.updateAvailable))}
@@ -1119,26 +1274,26 @@ function Services({
               <Download size={18} />
               <span>{runtimeActionLabel(summary.runtimes.redis, redisJob, "Install")}</span>
             </button>
-            <button disabled={busy || summary.services.redis.state === "running"} onClick={() => void post("/api/redis/start")}>
+            <button title="Start Redis" disabled={busy || summary.services.redis.state === "running"} onClick={() => void post("/api/redis/start")}>
               <Play size={18} />
               <span>Start</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/redis/stop")}>
+            <button title="Stop Redis" disabled={busy} onClick={() => void post("/api/redis/stop")}>
               <CircleStop size={18} />
               <span>Stop</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/redis/restart")}>
+            <button title="Restart Redis" disabled={busy} onClick={() => void post("/api/redis/restart")}>
               <RotateCw size={18} />
               <span>Restart</span>
             </button>
-            <button disabled={busy} onClick={() => void post("/api/redis/shell")}>
+            <button title="Open Redis CLI" disabled={busy} onClick={() => void post("/api/redis/shell")}>
               <SquareTerminal size={18} />
               <span>CLI</span>
             </button>
           </div>
           <div className="service-inline-settings">
             <input value={redisPort} onChange={(event) => setRedisPort(event.target.value)} inputMode="numeric" />
-            <button disabled={busy || !redisPort.trim()} onClick={() => void post("/api/redis/port", { port: Number(redisPort) })}>
+            <button title="Set Redis port" disabled={busy || !redisPort.trim()} onClick={() => void post("/api/redis/port", { port: Number(redisPort) })}>
               <Settings size={18} />
               <span>Set Port</span>
             </button>
@@ -1146,42 +1301,6 @@ function Services({
         </div>
         ) : null}
 
-        {showMongoDb ? (
-        <div className="service-panel">
-          <ServiceHeader icon={Database} title="MongoDB" service={summary.services.mongodb} detail={`127.0.0.1:${summary.config.mongodb.port}`} />
-          <RuntimePicker runtimes={[summary.runtimes.mongodb]} value={summary.runtimes.mongodb.version} onChange={() => undefined} />
-          {mongodbJob && (isActiveRuntimeJob(mongodbJob) || mongodbJob.status === "failed") ? <RuntimeProgress job={mongodbJob} /> : null}
-          <div className="service-actions">
-            <button
-              className={!summary.runtimes.mongodb.installed || summary.runtimes.mongodb.updateAvailable ? "primary" : ""}
-              disabled={busy || (summary.runtimes.mongodb.installed && !summary.runtimes.mongodb.updateAvailable) || Boolean(mongodbJob && isActiveRuntimeJob(mongodbJob))}
-              onClick={() => void startRuntimeInstall("mongodb", summary.runtimes.mongodb.version, Boolean(summary.runtimes.mongodb.updateAvailable))}
-            >
-              <Download size={18} />
-              <span>{runtimeActionLabel(summary.runtimes.mongodb, mongodbJob, "Install")}</span>
-            </button>
-            <button disabled={busy || summary.services.mongodb.state === "running"} onClick={() => void post("/api/mongodb/start")}>
-              <Play size={18} />
-              <span>Start</span>
-            </button>
-            <button disabled={busy} onClick={() => void post("/api/mongodb/stop")}>
-              <CircleStop size={18} />
-              <span>Stop</span>
-            </button>
-            <button disabled={busy} onClick={() => void post("/api/mongodb/restart")}>
-              <RotateCw size={18} />
-              <span>Restart</span>
-            </button>
-          </div>
-          <div className="service-inline-settings">
-            <input value={mongodbPort} onChange={(event) => setMongoDbPort(event.target.value)} inputMode="numeric" />
-            <button disabled={busy || !mongodbPort.trim()} onClick={() => void post("/api/mongodb/port", { port: Number(mongodbPort) })}>
-              <Settings size={18} />
-              <span>Set Port</span>
-            </button>
-          </div>
-        </div>
-        ) : null}
       </div>
 
       {showMysql || showPhpMyAdmin ? (
@@ -1190,18 +1309,18 @@ function Services({
           icon={Database}
           title="Database Workbench"
           service={summary.services.mysql}
-          detail={`MySQL ${summary.config.mysql.version} · 127.0.0.1:${summary.config.mysql.port}`}
+          detail={`${activeDatabaseLabel} · 127.0.0.1:${summary.config.mysql.port}`}
         />
         <div className="database-workbench">
           <div className="database-card">
             <h2>Create Database</h2>
             <div className="service-inline-settings">
               <input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} />
-              <button className="primary" disabled={busy || !databaseName.trim()} onClick={() => void post("/api/mysql/create-db", { name: databaseName })}>
+              <button className="primary" title="Create database" disabled={busy || !databaseName.trim()} onClick={() => void post("/api/mysql/create-db", { name: databaseName })}>
                 <Database size={18} />
                 <span>Create</span>
               </button>
-              <button disabled={busy || !databaseName.trim()} onClick={() => void loadEnv()}>
+              <button title="Generate Laravel env" disabled={busy || !databaseName.trim()} onClick={() => void loadEnv()}>
                 <FileText size={18} />
                 <span>Laravel Env</span>
               </button>
@@ -1213,18 +1332,18 @@ function Services({
             <h2>Root Password</h2>
             <div className="service-inline-settings">
               <input readOnly type={showRootPassword ? "text" : "password"} value={rootPassword} placeholder="Stored password" />
-              <button disabled={busy} onClick={() => void loadRootPassword()}>
+              <button title="Show root password" disabled={busy} onClick={() => void loadRootPassword()}>
                 <KeyRound size={18} />
                 <span>Show</span>
               </button>
-              <button disabled={busy || summary.services.mysql.state !== "running"} onClick={() => void resetRootPassword()}>
+              <button title="Reset root password" disabled={busy || summary.services.mysql.state !== "running"} onClick={() => void resetRootPassword()}>
                 <RotateCw size={18} />
                 <span>Reset</span>
               </button>
             </div>
             <div className="service-inline-settings">
               <input type="password" value={newRootPassword} onChange={(event) => setNewRootPassword(event.target.value)} placeholder="New root password" />
-              <button className="primary" disabled={busy || summary.services.mysql.state !== "running" || newRootPassword.length < 8} onClick={() => void changeRootPassword()}>
+              <button className="primary" title="Change root password" disabled={busy || summary.services.mysql.state !== "running" || newRootPassword.length < 8} onClick={() => void changeRootPassword()}>
                 <BadgeCheck size={18} />
                 <span>Change</span>
               </button>
@@ -1242,15 +1361,15 @@ function Services({
               }}
             />
             <div className="service-actions">
-              <button className={!summary.phpMyAdmin.installed ? "primary" : ""} disabled={busy || summary.phpMyAdmin.installed} onClick={() => void request("/api/phpmyadmin/install")}>
+              <button className={!summary.phpMyAdmin.installed ? "primary" : ""} title="Install phpMyAdmin" disabled={busy || summary.phpMyAdmin.installed} onClick={() => void request("/api/phpmyadmin/install")}>
                 <Download size={18} />
                 <span>{summary.phpMyAdmin.installed ? "Installed" : "Install"}</span>
               </button>
-              <button disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void post("/api/hosts/sync", {})}>
+              <button title="Sync hosts" disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void post("/api/hosts/sync", {})}>
                 <ListRestart size={18} />
                 <span>Sync Hosts</span>
               </button>
-              <button className="link-command-button" disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void openExternalUrl(summary.phpMyAdmin.url)}>
+              <button className="link-command-button" title="Open phpMyAdmin" disabled={busy || !summary.phpMyAdmin.installed} onClick={() => void openExternalUrl(summary.phpMyAdmin.url)}>
                 <ExternalLink size={16} />
                 <span>Open</span>
               </button>
@@ -1259,7 +1378,7 @@ function Services({
         </div>
 
         <dl className="details compact-service-details">
-          <dt>MySQL data</dt>
+          <dt>Database data</dt>
           <dd>{summary.paths.mysqlData}</dd>
           <dt>phpMyAdmin</dt>
           <dd>{summary.phpMyAdmin.installed ? summary.phpMyAdmin.root : "Not installed"}</dd>
@@ -1287,14 +1406,15 @@ function ServiceNavButton({
   active: boolean;
   onClick: () => void;
 }) {
+  const tone = service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber";
   return (
-    <button className={active ? "service-nav-item active" : "service-nav-item"} onClick={onClick}>
+    <button className={active ? "service-nav-item active" : "service-nav-item"} onClick={onClick} title={`${label} - ${detail} - ${service.state}`}>
       <Icon size={17} />
       <div>
         <strong>{label}</strong>
         <span>{detail}</span>
       </div>
-      <Badge label={service.state} tone={service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber"} />
+      <span className={`status-dot ${tone}`} title={service.state} />
     </button>
   );
 }
@@ -1313,7 +1433,7 @@ function ServiceSnapshot({
   tone: "green" | "amber" | "red";
 }) {
   return (
-    <div className="service-snapshot">
+    <div className="service-snapshot" title={`${label}: ${value} - ${detail}`}>
       <Icon size={18} />
       <div>
         <span>{label}</span>
@@ -1326,6 +1446,7 @@ function ServiceSnapshot({
 }
 
 function ServiceHeader({ icon: Icon, title, service, detail }: { icon: typeof Globe; title: string; service: ServiceStatus; detail?: string }) {
+  const tone = service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber";
   return (
     <div className="service-panel-header">
       <Icon size={20} />
@@ -1333,7 +1454,7 @@ function ServiceHeader({ icon: Icon, title, service, detail }: { icon: typeof Gl
         <strong>{title}</strong>
         <span>{detail || service.message || service.version || ""}</span>
       </div>
-      <Badge label={service.state} tone={service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber"} />
+      <span className={`status-dot ${tone}`} title={service.state} />
     </div>
   );
 }
@@ -1384,8 +1505,7 @@ function Setup({
         install={startRuntimeInstall}
         uninstall={removeRuntime}
       />
-      <RuntimePanel title="MySQL" kind="mysql" items={summary.runtimes.mysql} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
-      <RuntimePanel title="MongoDB" kind="mongodb" items={[summary.runtimes.mongodb]} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
+      <RuntimePanel title="Database" kind="mysql" items={summary.runtimes.mysql} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
       <RuntimePanel title="Redis" kind="redis" items={[summary.runtimes.redis]} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
       <RuntimePanel title="Node.js" kind="node" items={[summary.runtimes.node]} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
       <RuntimePanel
@@ -1424,9 +1544,7 @@ function RuntimePanel({
     const displayVersion = runtimeDisplayVersion(item);
     const warning =
       kind === "mysql"
-        ? `Remove ${item.name} ${displayVersion}? This deletes the app-local MySQL runtime folder, including local MySQL data. Stop MySQL first.`
-        : kind === "mongodb"
-          ? `Remove ${item.name} ${displayVersion}? This deletes the app-local MongoDB runtime folder, including local MongoDB data. Stop MongoDB first.`
+        ? `Remove ${displayVersion}? This deletes the app-local ${item.name} runtime folder, including local database data. Stop the database first.`
         : `Remove ${item.name} ${displayVersion}?`;
     if (!window.confirm(warning)) {
       return;
@@ -1557,7 +1675,7 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
             </div>
             <div className="sites-list">
               {summary.sites.map((site) => (
-                <button key={site.domain} className={site.domain === selectedSite.domain ? "site-list-item active" : "site-list-item"} onClick={() => setSelectedDomain(site.domain)}>
+                <button key={site.domain} className={site.domain === selectedSite.domain ? "site-list-item active" : "site-list-item"} onClick={() => setSelectedDomain(site.domain)} title={`${site.domain} - ${site.framework}`}>
                   <span>{site.domain}</span>
                   <small>{site.framework}</small>
                 </button>
@@ -1589,12 +1707,8 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
             {siteTab === "general" ? (
               <div className="site-general-grid">
                 <div className="site-preview-panel">
-                  <div className="site-preview-window">
-                    <Globe size={38} />
-                    <strong>{selectedSite.domain}</strong>
-                    <span>{selectedSite.documentRoot}</span>
-                  </div>
-                  <button className="primary" onClick={() => void openExternalUrl(selectedSite.url)}>
+                  <SitePreviewImage site={selectedSite} />
+                  <button className="primary" title="Open site" onClick={() => void openExternalUrl(selectedSite.url)}>
                     <ExternalLink size={18} />
                     <span>Open Site</span>
                   </button>
@@ -1660,6 +1774,44 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
         <div className="empty-state">No parked projects found.</div>
       )}
     </>
+  );
+}
+
+function SitePreviewImage({ site }: { site: Site }) {
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
+  const previewUrl = apiUrl(
+    `/api/sites/preview?site=${encodeURIComponent(site.domain)}${refreshToken > 0 ? `&refresh=1&t=${refreshToken}` : ""}`
+  );
+
+  useEffect(() => {
+    setState("loading");
+  }, [site.domain, refreshToken]);
+
+  return (
+    <div className="site-preview-window">
+      {state !== "error" ? (
+        <img src={previewUrl} alt={`${site.domain} preview`} onLoad={() => setState("loaded")} onError={() => setState("error")} />
+      ) : (
+        <div className="site-preview-fallback">
+          <Globe size={28} />
+          <strong>{site.domain}</strong>
+          <span>Preview unavailable</span>
+        </div>
+      )}
+      {state === "loading" ? (
+        <div className="site-preview-loading">
+          <LoaderCircle className="spin" size={18} />
+        </div>
+      ) : null}
+      <div className="site-preview-caption">
+        <Globe size={16} />
+        <strong>{site.domain}</strong>
+      </div>
+      <button className="site-preview-refresh" title="Refresh preview" onClick={() => setRefreshToken(Date.now())}>
+        <RotateCw size={16} />
+      </button>
+    </div>
   );
 }
 
@@ -2243,6 +2395,9 @@ function Mysql({
   const mysql = summary.services.mysql;
   const selectedRuntime = summary.runtimes.mysql.find((runtime) => runtime.version === selectedVersion) ?? summary.runtimes.mysql[0];
   const activeRuntime = summary.runtimes.mysql.find((runtime) => runtime.version === summary.config.mysql.version) ?? selectedRuntime;
+  const activeDatabaseName = databaseEngineName(activeRuntime);
+  const activeDatabaseLabel = databaseRuntimeDisplay(activeRuntime);
+  const selectedDatabaseLabel = databaseRuntimeDisplay(selectedRuntime);
   const installJob = selectedRuntime ? latestRuntimeJob(Object.values(installJobs), "mysql", selectedRuntime.version) : undefined;
   const installing = installJob ? isActiveRuntimeJob(installJob) : false;
   const showInstallProgress = installJob ? installing || installJob.status === "failed" : false;
@@ -2264,7 +2419,7 @@ function Mysql({
   }
 
   async function resetRootPassword() {
-    if (!window.confirm("Reset MySQL root password?")) {
+    if (!window.confirm(`Reset ${activeDatabaseName} root password?`)) {
       return;
     }
     const payload = (await request("/api/mysql/reset-password")) as { password?: string };
@@ -2291,7 +2446,7 @@ function Mysql({
             onClick={() => void startRuntimeInstall("mysql", selectedRuntime.version, Boolean(selectedRuntime.updateAvailable))}
           >
             <Download size={18} />
-            <span>{runtimeActionLabel(selectedRuntime, installJob, "Install MySQL")}</span>
+            <span>{runtimeActionLabel(selectedRuntime, installJob, `Install ${selectedDatabaseLabel}`)}</span>
           </button>
         ) : null}
         <button disabled={busy} onClick={() => void post("/api/mysql/init")}>
@@ -2321,7 +2476,7 @@ function Mysql({
         <div className="segmented">
           {summary.runtimes.mysql.map((runtime) => (
             <button key={runtime.version} className={selectedVersion === runtime.version ? "active" : ""} onClick={() => setSelectedVersion(runtime.version)}>
-              {runtime.version}
+              {runtimeDisplayVersion(runtime)}
             </button>
           ))}
         </div>
@@ -2333,7 +2488,7 @@ function Mysql({
         </div>
         <dl className="details">
           <dt>Active</dt>
-          <dd>MySQL {summary.config.mysql.version}</dd>
+          <dd>{activeDatabaseLabel}</dd>
           <dt>Selected runtime</dt>
           <dd>{selectedRuntime ? `${selectedRuntime.installed ? "Installed" : "Not installed"} at ${selectedRuntime.root}` : "Unavailable"}</dd>
         </dl>
@@ -2422,7 +2577,7 @@ function Mysql({
         {envText ? <pre className="snippet">{envText}</pre> : null}
         <dl className="details">
           <dt>Version</dt>
-          <dd>{summary.config.mysql.version}</dd>
+          <dd>{activeDatabaseLabel}</dd>
           <dt>Port</dt>
           <dd>{summary.config.mysql.port}</dd>
           <dt>Root user</dt>
@@ -2528,119 +2683,318 @@ function Redis({
   );
 }
 
-function MongoDB({
-  summary,
-  post,
-  installJobs,
-  startRuntimeInstall,
-  busy
-}: ViewProps & {
-  installJobs: RuntimeJobMap;
-  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
-}) {
-  const [port, setPort] = useState(String(summary.config.mongodb.port));
-  const mongodb = summary.runtimes.mongodb;
-  const installJob = latestRuntimeJob(Object.values(installJobs), "mongodb", mongodb.version);
-  const installing = installJob ? isActiveRuntimeJob(installJob) : false;
-  const showInstallProgress = installJob ? installing || installJob.status === "failed" : false;
-
-  useEffect(() => {
-    setPort(String(summary.config.mongodb.port));
-  }, [summary.config.mongodb.port]);
-
-  return (
-    <>
-      <ServiceStrip service={summary.services.mongodb} />
-      <div className="toolbar">
-        <button
-          className={!mongodb.installed || mongodb.updateAvailable ? "primary" : ""}
-          disabled={busy || (mongodb.installed && !mongodb.updateAvailable) || installing}
-          onClick={() => void startRuntimeInstall("mongodb", mongodb.version, Boolean(mongodb.updateAvailable))}
-        >
-          <Download size={18} />
-          <span>{runtimeActionLabel(mongodb, installJob, "Install MongoDB")}</span>
-        </button>
-        <button className="primary" disabled={busy || summary.services.mongodb.state === "running"} onClick={() => void post("/api/mongodb/start")}>
-          <Play size={18} />
-          <span>Start</span>
-        </button>
-        <button disabled={busy} onClick={() => void post("/api/mongodb/stop")}>
-          <CircleStop size={18} />
-          <span>Stop</span>
-        </button>
-        <button disabled={busy} onClick={() => void post("/api/mongodb/restart")}>
-          <RotateCw size={18} />
-          <span>Restart</span>
-        </button>
-      </div>
-      {installJob && showInstallProgress ? <RuntimeProgress job={installJob} /> : null}
-      <div className="two-column">
-        <div className="panel">
-          <h2>Connection</h2>
-          <div className="inline-form">
-            <input value={port} onChange={(event) => setPort(event.target.value)} inputMode="numeric" />
-            <button disabled={busy || !port.trim()} onClick={() => void post("/api/mongodb/port", { port: Number(port) })}>
-              <Settings size={18} />
-              <span>Set Port</span>
-            </button>
-            <button disabled={busy} onClick={() => void post("/api/mongodb/port", { port: "auto" })}>
-              <RotateCw size={18} />
-              <span>Auto Port</span>
-            </button>
-          </div>
-          <dl className="details">
-            <dt>Host</dt>
-            <dd>127.0.0.1</dd>
-            <dt>Port</dt>
-            <dd>{summary.config.mongodb.port}</dd>
-            <dt>Data directory</dt>
-            <dd>{summary.paths.mongodbData}</dd>
-          </dl>
-        </div>
-        <div className="panel">
-          <h2>Runtime</h2>
-          <dl className="details">
-            <dt>Version</dt>
-            <dd>{mongodb.installedPackageVersion ?? mongodb.version}</dd>
-            <dt>Binary</dt>
-            <dd>{mongodb.binary}</dd>
-            <dt>Root</dt>
-            <dd>{summary.paths.mongodbRoot}</dd>
-            <dt>Log</dt>
-            <dd>{summary.services.mongodb.logPath}</dd>
-          </dl>
-        </div>
-      </div>
-    </>
-  );
-}
-
 function Logs({ summary }: { summary: DashboardSummary }) {
   return (
     <pre className="logs">{summary.logs.length ? summary.logs.join("\n") : "No log entries yet."}</pre>
   );
 }
 
-function SettingsView({ summary }: { summary: DashboardSummary }) {
+function SettingsView({
+  summary,
+  post,
+  request,
+  busy
+}: ViewProps & {
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+}) {
+  const [tld, setTld] = useState(summary.config.tld);
+  const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
+  const [phpChoice, setPhpChoice] = useState(summary.config.globalPhpVersion);
+  const [databaseChoice, setDatabaseChoice] = useState(summary.config.mysql.version);
+  const [copiedPath, setCopiedPath] = useState("");
+  const [hostsPreview, setHostsPreview] = useState("");
+
+  const normalizedTld = normalizeLocalTld(tld);
+  const tldValid = isValidLocalTld(normalizedTld);
+  const tldChanged = normalizedTld !== summary.config.tld;
+  const selectedDatabase = selectedMysqlRuntime(summary, databaseChoice);
+  const databaseRunning = summary.services.mysql.state === "running";
+  const firstParkedFolder = summary.config.parkedFolders[0] ?? "";
+  const parkedFoldersKey = summary.config.parkedFolders.join("|");
+  const phpVersionsKey = summary.runtimes.php.map((runtime) => runtime.version).join("|");
+  const databaseVersionsKey = summary.runtimes.mysql.map((runtime) => runtime.version).join("|");
+  const pathRows = [
+    { label: "Config", value: summary.paths.configFile, icon: FileText, reveal: true },
+    { label: "Hosts", value: summary.paths.hostsFile, icon: Network, reveal: true },
+    { label: "App data", value: summary.paths.home, icon: HardDrive },
+    { label: "Logs", value: summary.paths.logs, icon: FileText },
+    { label: "Nginx config", value: summary.paths.nginxConfig, icon: Server, reveal: true },
+    { label: "Nginx sites", value: summary.paths.nginxSites, icon: FolderOpen },
+    { label: "Database data", value: summary.paths.mysqlData, icon: Database },
+    { label: "CA certificate", value: summary.ssl.certPath, icon: ShieldCheck, reveal: true }
+  ];
+
+  useEffect(() => {
+    setTld((current) => (normalizeLocalTld(current) === summary.config.tld ? summary.config.tld : current));
+  }, [summary.config.tld]);
+
+  useEffect(() => {
+    setFolder((current) => (current.trim() ? current : firstParkedFolder));
+  }, [firstParkedFolder, parkedFoldersKey]);
+
+  useEffect(() => {
+    setPhpChoice((current) => (summary.runtimes.php.some((runtime) => runtime.version === current) ? current : summary.config.globalPhpVersion));
+  }, [phpVersionsKey, summary.config.globalPhpVersion, summary.runtimes.php]);
+
+  useEffect(() => {
+    setDatabaseChoice((current) => (summary.runtimes.mysql.some((runtime) => runtime.version === current) ? current : summary.config.mysql.version));
+  }, [databaseVersionsKey, summary.config.mysql.version, summary.runtimes.mysql]);
+
+  async function saveGeneralSettings() {
+    await request("/api/settings", { tld: normalizedTld });
+    setHostsPreview("");
+  }
+
+  async function browseFolder() {
+    const payload = (await request("/api/dialog/folder", { initialPath: folder })) as { path?: string | null };
+    if (payload.path) {
+      setFolder(payload.path);
+    }
+  }
+
+  async function copyPath(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const fallback = document.createElement("textarea");
+      fallback.value = value;
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand("copy");
+      document.body.removeChild(fallback);
+    }
+    setCopiedPath(value);
+    window.setTimeout(() => setCopiedPath((current) => (current === value ? "" : current)), 1200);
+  }
+
+  async function previewHosts() {
+    const payload = (await request("/api/hosts/sync", { dryRun: true })) as { hosts?: string };
+    setHostsPreview(payload.hosts ?? "");
+  }
+
   return (
-    <div className="panel">
-      <h2>Configuration</h2>
-      <dl className="details">
-        <dt>Config file</dt>
-        <dd>{summary.paths.configFile}</dd>
-        <dt>Hosts file</dt>
-        <dd>{summary.paths.hostsFile}</dd>
-        <dt>App data</dt>
-        <dd>{summary.paths.home}</dd>
-        <dt>Local TLD</dt>
-        <dd>{summary.config.tld}</dd>
-        <dt>SSL CA</dt>
-        <dd>{summary.ssl.trusted ? summary.ssl.store ?? "Trusted" : summary.ssl.message ?? "Untrusted"}</dd>
-        <dt>CA certificate</dt>
-        <dd>{summary.ssl.certPath}</dd>
-      </dl>
+    <div className="settings-view">
+      <div className="settings-overview">
+        <SettingsStat icon={Globe} label="Local TLD" value={`.${summary.config.tld}`} />
+        <SettingsStat icon={FolderOpen} label="Parked" value={`${summary.config.parkedFolders.length} folders`} />
+        <SettingsStat icon={ShieldCheck} label="SSL CA" value={summary.ssl.trusted ? "Trusted" : "Untrusted"} tone={summary.ssl.trusted ? "green" : "amber"} />
+        <SettingsStat icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} />
+      </div>
+
+      <div className="settings-layout">
+        <section className="settings-panel">
+          <SettingsPanelHeader icon={SlidersHorizontal} title="General" detail="Local names and default runtimes" />
+          <div className="settings-form-grid">
+            <label>
+              <span>Local TLD</span>
+              <div className={tldValid || !tld.trim() ? "tld-field" : "tld-field invalid"}>
+                <span>.</span>
+                <input value={tld} onChange={(event) => setTld(event.target.value)} placeholder="test" />
+              </div>
+            </label>
+            <label>
+              <span>Global PHP</span>
+              <select value={phpChoice} onChange={(event) => setPhpChoice(event.target.value)}>
+                {summary.runtimes.php.map((runtime) => (
+                  <option key={runtime.version} value={runtime.version}>
+                    PHP {runtime.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Database</span>
+              <select value={databaseChoice} onChange={(event) => setDatabaseChoice(event.target.value)}>
+                {summary.runtimes.mysql.map((runtime) => (
+                  <option key={runtime.version} value={runtime.version}>
+                    {runtimeDisplayVersion(runtime)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="settings-actions">
+            <button className="primary" disabled={busy || !tldValid || !tldChanged} onClick={() => void saveGeneralSettings()} title="Save local TLD">
+              <Save size={16} />
+              <span>Save TLD</span>
+            </button>
+            <button disabled={busy || phpChoice === summary.config.globalPhpVersion} onClick={() => void post("/api/php/use", { version: phpChoice })} title="Use selected PHP">
+              <BadgeCheck size={16} />
+              <span>Use PHP</span>
+            </button>
+            <button
+              disabled={busy || databaseChoice === summary.config.mysql.version || databaseRunning}
+              onClick={() => void post("/api/mysql/version", { version: databaseChoice })}
+              title={databaseRunning ? "Stop the database before switching runtime" : `Use ${databaseRuntimeDisplay(selectedDatabase)}`}
+            >
+              <Database size={16} />
+              <span>Use DB</span>
+            </button>
+          </div>
+          {!tldValid && tld.trim() ? <span className="settings-warning">Use letters, numbers, or hyphens only.</span> : null}
+        </section>
+
+        <section className="settings-panel">
+          <SettingsPanelHeader icon={FolderPlus} title="Sites Folders" detail={`${summary.sites.length} discovered sites`} />
+          <div className="inline-form compact-folder-form">
+            <div className="path-picker">
+              <input value={folder} onChange={(event) => setFolder(event.target.value)} placeholder="C:\www" />
+              <button type="button" className="field-icon-button" disabled={busy} onClick={() => void browseFolder()} title="Browse folder">
+                <FolderOpen size={16} />
+              </button>
+            </div>
+            <button className="primary" disabled={busy || !folder.trim()} onClick={() => void post("/api/sites/park", { path: folder })} title="Park folder">
+              <FolderPlus size={16} />
+              <span>Park</span>
+            </button>
+          </div>
+          <div className="settings-path-list">
+            {summary.config.parkedFolders.length ? (
+              summary.config.parkedFolders.map((parkedFolder) => (
+                <SettingsPathRow
+                  key={parkedFolder}
+                  icon={FolderOpen}
+                  label={pathTail(parkedFolder) || "Sites"}
+                  value={parkedFolder}
+                  copied={copiedPath === parkedFolder}
+                  onCopy={() => void copyPath(parkedFolder)}
+                  onOpen={() => void post("/api/open-path", { path: parkedFolder })}
+                />
+              ))
+            ) : (
+              <div className="settings-empty-row">No parked folders yet.</div>
+            )}
+          </div>
+        </section>
+
+        <section className="settings-panel">
+          <SettingsPanelHeader icon={Shield} title="Hosts & SSL" detail={summary.ssl.store ?? summary.ssl.message ?? summary.paths.hostsFile} />
+          <div className="settings-action-grid">
+            <div className="settings-action-tile">
+              <Network size={18} />
+              <div>
+                <strong>Hosts</strong>
+                <span>{summary.sites.length} local domains</span>
+              </div>
+              <button disabled={busy} onClick={() => void previewHosts()} title="Preview hosts entries">
+                <FileText size={16} />
+              </button>
+              <button className="primary" disabled={busy} onClick={() => void post("/api/hosts/sync", {})} title="Sync hosts file">
+                <RotateCw size={16} />
+              </button>
+            </div>
+            <div className="settings-action-tile">
+              <ShieldCheck size={18} />
+              <div>
+                <strong>Local CA</strong>
+                <span>{summary.ssl.trusted ? summary.ssl.store ?? "Trusted" : summary.ssl.message ?? "Untrusted"}</span>
+              </div>
+              <button disabled={busy} onClick={() => void post("/api/open-path", { path: summary.ssl.certPath, reveal: true })} title="Show certificate">
+                <FolderOpen size={16} />
+              </button>
+              <button className={!summary.ssl.trusted ? "primary" : ""} disabled={busy || summary.ssl.trusted || summary.ssl.platform !== "win32"} onClick={() => void post("/api/ssl/trust")} title="Trust CA">
+                <Lock size={16} />
+              </button>
+            </div>
+          </div>
+          {hostsPreview ? <pre className="settings-hosts-preview">{hostsPreview}</pre> : null}
+        </section>
+
+        <section className="settings-panel">
+          <SettingsPanelHeader icon={HardDrive} title="Files" detail="Open or copy app paths" />
+          <div className="settings-path-list dense">
+            {pathRows.map((item) => (
+              <SettingsPathRow
+                key={item.label}
+                icon={item.icon}
+                label={item.label}
+                value={item.value}
+                copied={copiedPath === item.value}
+                onCopy={() => void copyPath(item.value)}
+                onOpen={() => void post("/api/open-path", { path: item.value, reveal: item.reveal === true })}
+              />
+            ))}
+          </div>
+        </section>
+      </div>
     </div>
   );
+}
+
+function SettingsStat({
+  icon: Icon,
+  label,
+  value,
+  tone = "default"
+}: {
+  icon: typeof Globe;
+  label: string;
+  value: string;
+  tone?: "default" | "green" | "amber";
+}) {
+  return (
+    <div className={`settings-stat ${tone}`}>
+      <Icon size={18} />
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanelHeader({ icon: Icon, title, detail }: { icon: typeof Globe; title: string; detail: string }) {
+  return (
+    <div className="settings-panel-header">
+      <Icon size={18} />
+      <div>
+        <strong>{title}</strong>
+        <span>{detail}</span>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPathRow({
+  icon: Icon,
+  label,
+  value,
+  copied,
+  onCopy,
+  onOpen
+}: {
+  icon: typeof Globe;
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+  onOpen: () => void;
+}) {
+  return (
+    <div className="settings-path-row">
+      <Icon size={16} />
+      <div>
+        <strong>{label}</strong>
+        <span>{value}</span>
+      </div>
+      <button onClick={onCopy} title={copied ? "Copied" : "Copy path"}>
+        {copied ? <CheckCircle2 size={16} /> : <Clipboard size={16} />}
+      </button>
+      <button onClick={onOpen} title="Open path">
+        <FolderOpen size={16} />
+      </button>
+    </div>
+  );
+}
+
+function normalizeLocalTld(value: string): string {
+  return value.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+}
+
+function isValidLocalTld(value: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
 }
 
 function phpFastCgiEndpoint(version: string): string {
@@ -2736,6 +3090,9 @@ function runtimeActionLabel(item: RuntimeInstallStatus, job?: RuntimeInstallJob,
 }
 
 function runtimeDisplayVersion(item: RuntimeInstallStatus): string {
+  if (item.name === "MySQL" || item.name === "MariaDB") {
+    return databaseRuntimeDisplay(item);
+  }
   if (item.name === "Composer" && item.installedPackageVersion) {
     return item.installedPackageVersion;
   }
