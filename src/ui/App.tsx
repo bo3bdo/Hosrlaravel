@@ -1855,16 +1855,18 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
 
           <section className="site-detail-pane">
             <div className="site-detail-header">
-              <div>
+              <div className="site-heading">
                 <span className="eyebrow">{selectedSite.framework}</span>
                 <h2>{selectedSite.name}</h2>
-                <button className="link-button" onClick={() => void openExternalUrl(selectedSite.url)}>
-                  <ExternalLink size={15} />
-                  <span>{selectedSite.url}</span>
-                </button>
-                <span className={selectedSite.secured ? "site-security-badge secured" : "site-security-badge"}>
-                  {selectedSite.secured ? "HTTPS enabled" : "HTTP only"}
-                </span>
+                <div className="site-url-row">
+                  <button className="link-button" onClick={() => void openExternalUrl(selectedSite.url)}>
+                    <ExternalLink size={15} />
+                    <span>{selectedSite.url}</span>
+                  </button>
+                  <span className={selectedSite.secured ? "site-security-badge secured" : "site-security-badge"}>
+                    {selectedSite.secured ? "HTTPS" : "HTTP"}
+                  </span>
+                </div>
               </div>
               <button className={selectedSite.secured ? "" : "primary"} disabled={busy || (selectedSite.secured && !summary.ssl.trusted)} onClick={() => void post(selectedSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: selectedSite.domain })}>
                 {selectedSite.secured ? <Lock size={18} /> : <LockOpen size={18} />}
