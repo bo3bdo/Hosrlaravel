@@ -38,25 +38,35 @@ import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLa
 import { clearLogs } from "../core/logging.js";
 import type { NewSiteRequest, RuntimeKind, ServiceAction } from "../core/types.js";
 import { getSiteCreationJob, startSiteCreationJob } from "./siteJobs.js";
+import { ApiHttpError, apiSecurityHeaders, assertTrustedApiRequest, corsOrigin, maxJsonBodyBytes, statusForError } from "./httpSecurity.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.LARABOXS_API_PORT ?? 47899);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const builtUiRoot = path.join(projectRoot, "dist-ui");
+const dashboardCsp =
+  "default-src 'self'; connect-src 'self' http://127.0.0.1:47899 http://localhost:47899; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 const server = http.createServer(async (request, response) => {
-  response.setHeader("Access-Control-Allow-Origin", corsOrigin(request.headers.origin));
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-
-  if (request.method === "OPTIONS") {
-    response.writeHead(204);
-    response.end();
-    return;
+  for (const [name, value] of Object.entries(apiSecurityHeaders())) {
+    response.setHeader(name, value);
   }
+  response.setHeader("Access-Control-Allow-Origin", corsOrigin(request.headers.origin, port));
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Laraboxs-Token");
+  response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 
   try {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
+
+    if (url.pathname.startsWith("/api/")) {
+      assertTrustedApiRequest(request, port);
+    }
+
+    if (request.method === "OPTIONS") {
+      response.writeHead(204);
+      response.end();
+      return;
+    }
 
     if (request.method === "GET" && url.pathname === "/api/health") {
       await sendJson(response, {
@@ -245,7 +255,7 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       const versions = optionalStringArray(body.versions);
       if (!versions) {
-        throw new Error("PHP versions are required.");
+        throw new ApiHttpError(400, "PHP versions are required.");
       }
       await setConfiguredPhpVersions(versions, typeof body.globalVersion === "string" ? body.globalVersion : undefined);
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
@@ -498,38 +508,11 @@ const server = http.createServer(async (request, response) => {
       }
     }
 
-    response.writeHead(404, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "Not found" }));
+    sendError(response, new ApiHttpError(404, "Not found"));
   } catch (error) {
-    response.writeHead(500, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    sendError(response, error);
   }
 });
-
-function corsOrigin(origin: string | undefined): string {
-  if (!origin) {
-    return "http://127.0.0.1:5173";
-  }
-
-  if (origin === "null" || origin.startsWith("tauri://")) {
-    return origin;
-  }
-
-  try {
-    const url = new URL(origin);
-    if (
-      url.hostname === "tauri.localhost" ||
-      (url.hostname === "127.0.0.1" && (url.port === "5173" || url.port === String(port))) ||
-      (url.hostname === "localhost" && (url.port === "5173" || url.port === String(port)))
-    ) {
-      return origin;
-    }
-  } catch {
-    // Keep the development origin fallback below.
-  }
-
-  return "http://127.0.0.1:5173";
-}
 
 server.listen(port, host, () => {
   console.log(`laraboxs helper API listening on http://${host}:${port}`);
@@ -603,6 +586,13 @@ async function sendJson(response: http.ServerResponse, value: unknown): Promise<
   response.end(JSON.stringify(value, null, 2));
 }
 
+function sendError(response: http.ServerResponse, error: unknown): void {
+  const statusCode = statusForError(error);
+  const message = error instanceof Error ? error.message : String(error);
+  response.writeHead(statusCode, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ error: message }, null, 2));
+}
+
 async function serveBuiltUi(request: http.IncomingMessage, response: http.ServerResponse, url: URL): Promise<boolean> {
   const filePath = await builtUiFilePath(url.pathname);
   if (!filePath) {
@@ -612,7 +602,8 @@ async function serveBuiltUi(request: http.IncomingMessage, response: http.Server
   const body = request.method === "HEAD" ? undefined : await readFile(filePath);
   response.writeHead(200, {
     "Content-Type": contentTypeFor(filePath),
-    "Cache-Control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable"
+    "Cache-Control": filePath.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable",
+    "Content-Security-Policy": dashboardCsp
   });
   response.end(body);
   return true;
@@ -681,18 +672,47 @@ function contentTypeFor(filePath: string): string {
 function readJson(request: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on("error", reject);
+    let bytes = 0;
+    let rejected = false;
+    request.on("data", (chunk) => {
+      if (rejected) {
+        return;
+      }
+      const buffer = Buffer.from(chunk);
+      bytes += buffer.byteLength;
+      if (bytes > maxJsonBodyBytes) {
+        rejected = true;
+        reject(new ApiHttpError(413, `JSON request body must be ${maxJsonBodyBytes} bytes or smaller.`));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    request.on("error", (error) => {
+      if (!rejected) {
+        reject(error);
+      }
+    });
     request.on("end", () => {
+      if (rejected) {
+        return;
+      }
       const raw = Buffer.concat(chunks).toString("utf8");
-      resolve(raw ? (JSON.parse(raw) as Record<string, unknown>) : {});
+      if (!raw) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw) as Record<string, unknown>);
+      } catch {
+        reject(new ApiHttpError(400, "Request body must be valid JSON."));
+      }
     });
   });
 }
 
 function assertString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${name} is required.`);
+    throw new ApiHttpError(400, `${name} is required.`);
   }
   return value;
 }
@@ -703,11 +723,11 @@ function assertHttpUrl(value: unknown): string {
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error("URL is invalid.");
+    throw new ApiHttpError(400, "URL is invalid.");
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Only http and https URLs can be opened.");
+    throw new ApiHttpError(400, "Only http and https URLs can be opened.");
   }
 
   return parsed.toString();
@@ -762,7 +782,7 @@ async function openLocalPath(target: string, reveal: boolean): Promise<string> {
 
 function assertGeneralSettings(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Settings are required.");
+    throw new ApiHttpError(400, "Settings are required.");
   }
 
   const input = value as Record<string, unknown>;
@@ -775,14 +795,14 @@ function assertGeneralSettings(value: unknown) {
 function assertLocalTld(value: string): string {
   const tld = value.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tld)) {
-    throw new Error("Local TLD must use letters, numbers, or hyphens.");
+    throw new ApiHttpError(400, "Local TLD must use letters, numbers, or hyphens.");
   }
   return tld;
 }
 
 function assertPhpSettings(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("PHP settings are required.");
+    throw new ApiHttpError(400, "PHP settings are required.");
   }
 
   const input = value as Record<string, unknown>;
@@ -800,7 +820,7 @@ function assertPhpSettings(value: unknown) {
 
 function assertNginxSettings(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Nginx settings are required.");
+    throw new ApiHttpError(400, "Nginx settings are required.");
   }
 
   const input = value as Record<string, unknown>;
@@ -813,7 +833,7 @@ function assertNginxSettings(value: unknown) {
 
 function assertNewSiteRequest(value: unknown): NewSiteRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Site options are required.");
+    throw new ApiHttpError(400, "Site options are required.");
   }
 
   const input = value as Record<string, unknown>;
@@ -835,7 +855,7 @@ function newSitePreset(value: unknown): NewSiteRequest["preset"] {
   if (value === "laravel" || value === "php" || value === "static") {
     return value;
   }
-  throw new Error("Site preset must be laravel, php, or static.");
+  throw new ApiHttpError(400, "Site preset must be laravel, php, or static.");
 }
 
 function optionalEnum<T extends string>(value: unknown, allowed: readonly T[], label: string): T | undefined {
@@ -845,7 +865,7 @@ function optionalEnum<T extends string>(value: unknown, allowed: readonly T[], l
   if (typeof value === "string" && (allowed as readonly string[]).includes(value)) {
     return value as T;
   }
-  throw new Error(`Unsupported ${label}: ${String(value)}`);
+  throw new ApiHttpError(400, `Unsupported ${label}: ${String(value)}`);
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -859,7 +879,7 @@ function optionalNumber(value: unknown): number | undefined {
 function requiredPort(value: unknown, name: string): number {
   const port = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isInteger(port)) {
-    throw new Error(`${name} is required.`);
+    throw new ApiHttpError(400, `${name} is required.`);
   }
   return port;
 }
@@ -872,12 +892,12 @@ function serviceAction(value: string | undefined): ServiceAction {
   if (value === "start" || value === "stop" || value === "restart") {
     return value;
   }
-  throw new Error(`Unsupported service action: ${value ?? ""}`);
+  throw new ApiHttpError(400, `Unsupported service action: ${value ?? ""}`);
 }
 
 function assertRuntimeKind(value: unknown): RuntimeKind {
   if (value === "php" || value === "mysql" || value === "nginx" || value === "redis" || value === "node" || value === "composer") {
     return value;
   }
-  throw new Error(`Unsupported runtime: ${String(value)}`);
+  throw new ApiHttpError(400, `Unsupported runtime: ${String(value)}`);
 }

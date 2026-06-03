@@ -50,6 +50,7 @@ interface RuntimeInstallMarker {
   version: string;
   packageVersion?: string;
   downloadUrl: string;
+  checksumSha256?: string;
   installedAt: string;
 }
 
@@ -204,49 +205,59 @@ export async function installRuntime(kind: RuntimeKind, version?: string, option
   const downloadName = `${entry.kind}-${entry.version}.${entry.archiveType === "zip" ? "zip" : "download"}`;
   const downloadPath = path.join(downloadsDir(), downloadName);
   const downloadEndPercent = entry.archiveType === "zip" ? 78 : 90;
+  let extractRoot: string | undefined;
 
-  report({
-    status: "downloading",
-    percent: 5,
-    message: `Downloading ${entry.name} ${entry.version}.`
-  });
-  await downloadFile(entry.downloadUrl, downloadPath, "runtime", {
-    onProgress: (progress) => {
+  try {
+    report({
+      status: "downloading",
+      percent: 5,
+      message: `Downloading ${entry.name} ${entry.version}.`
+    });
+    await downloadFile(entry.downloadUrl, downloadPath, "runtime", {
+      checksumSha256: entry.checksumSha256,
+      retries: 2,
+      onProgress: (progress) => {
+        report({
+          status: "downloading",
+          percent: scalePercent(progress.percent ?? 0, 5, downloadEndPercent),
+          message: `Downloading ${entry.name} ${entry.version}.`,
+          bytesDownloaded: progress.bytesDownloaded,
+          totalBytes: progress.totalBytes,
+          etaSeconds: progress.etaSeconds
+        });
+      }
+    });
+
+    if (entry.archiveType === "zip") {
+      extractRoot = path.join(downloadsDir(), `${entry.kind}-${entry.version}-extract`);
+      await rm(extractRoot, { recursive: true, force: true });
       report({
-        status: "downloading",
-        percent: scalePercent(progress.percent ?? 0, 5, downloadEndPercent),
-        message: `Downloading ${entry.name} ${entry.version}.`,
-        bytesDownloaded: progress.bytesDownloaded,
-        totalBytes: progress.totalBytes,
-        etaSeconds: progress.etaSeconds
+        status: "extracting",
+        percent: 82,
+        message: `Extracting ${entry.name} ${entry.version}.`
       });
+      await extractZip(downloadPath, extractRoot, "runtime");
+      report({
+        status: "installing",
+        percent: 95,
+        message: `Finalizing ${entry.name} ${entry.version}.`
+      });
+      await mergeSingleExtractedFolder(extractRoot, entry.root);
+    } else {
+      await mkdir(entry.root, { recursive: true });
+      const { copyFile } = await import("node:fs/promises");
+      report({
+        status: "installing",
+        percent: 95,
+        message: `Finalizing ${entry.name} ${entry.version}.`
+      });
+      await copyFile(downloadPath, entry.binary);
     }
-  });
-
-  if (entry.archiveType === "zip") {
-    const extractRoot = path.join(downloadsDir(), `${entry.kind}-${entry.version}-extract`);
-    await rm(extractRoot, { recursive: true, force: true });
-    report({
-      status: "extracting",
-      percent: 82,
-      message: `Extracting ${entry.name} ${entry.version}.`
-    });
-    await extractZip(downloadPath, extractRoot, "runtime");
-    report({
-      status: "installing",
-      percent: 95,
-      message: `Finalizing ${entry.name} ${entry.version}.`
-    });
-    await mergeSingleExtractedFolder(extractRoot, entry.root);
-  } else {
-    await mkdir(entry.root, { recursive: true });
-    const { copyFile } = await import("node:fs/promises");
-    report({
-      status: "installing",
-      percent: 95,
-      message: `Finalizing ${entry.name} ${entry.version}.`
-    });
-    await copyFile(downloadPath, entry.binary);
+  } catch (error) {
+    if (extractRoot) {
+      await rm(extractRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+    throw error;
   }
 
   await writeRuntimeMarker(entry);
@@ -518,6 +529,9 @@ function runtimeMarker(entry: RuntimeManifestEntry, packageVersion = entry.packa
   if (packageVersion) {
     marker.packageVersion = packageVersion;
   }
+  if (entry.checksumSha256) {
+    marker.checksumSha256 = entry.checksumSha256;
+  }
   return marker;
 }
 
@@ -530,7 +544,8 @@ function readRuntimeMarker(entry: RuntimeManifestEntry): RuntimeInstallMarker | 
       marker.version !== entry.version ||
       typeof marker.downloadUrl !== "string" ||
       typeof marker.installedAt !== "string" ||
-      (marker.packageVersion !== undefined && typeof marker.packageVersion !== "string")
+      (marker.packageVersion !== undefined && typeof marker.packageVersion !== "string") ||
+      (marker.checksumSha256 !== undefined && typeof marker.checksumSha256 !== "string")
     ) {
       return undefined;
     }
@@ -567,6 +582,10 @@ function writeRuntimeMarkerSyncBestEffort(entry: RuntimeManifestEntry, marker: R
 }
 
 function runtimeNeedsUpdate(entry: RuntimeManifestEntry, marker: RuntimeInstallMarker): boolean {
+  if (entry.checksumSha256 && marker.checksumSha256 !== entry.checksumSha256) {
+    return true;
+  }
+
   if (entry.packageVersion && marker.packageVersion) {
     const comparison = compareDottedVersions(marker.packageVersion, entry.packageVersion);
     return comparison === undefined ? marker.packageVersion !== entry.packageVersion : comparison < 0;

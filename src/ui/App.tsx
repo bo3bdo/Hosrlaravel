@@ -54,6 +54,8 @@ import type {
   Site,
   SiteCreationResult
 } from "./types.js";
+import { apiUrl, copyTextToClipboard, fetchRuntimeInstallJob, getJson, openExternalUrl, postJson, responseErrorMessage } from "./apiClient.js";
+import { HealthCheckPanel } from "./components/HealthCheckPanel.js";
 import { ToastContainer } from "./components/ToastContainer.js";
 import { useToasts, showToast } from "./components/useToasts.js";
 
@@ -88,53 +90,6 @@ function serviceBadgeForSection(sectionId: Section, summary: DashboardSummary): 
     return <span className={`status-dot ${tone}`} title={`${runningServices}/4 services running`} />;
   }
   return null;
-} function apiUrl(path: string): string {
-  if (/^https?:\/\//.test(path)) {
-    return path;
-  }
-
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const isLocalBrowser =
-    (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") &&
-    (window.location.port === "5173" || window.location.port === "47899");
-
-  if ((window.location.protocol === "http:" || window.location.protocol === "https:") && isLocalBrowser) {
-    return normalizedPath;
-  }
-
-  return `http://127.0.0.1:47899${normalizedPath}`;
-}
-
-async function openExternalUrl(url: string): Promise<void> {
-  try {
-    const response = await fetch(apiUrl("/api/open-url"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url })
-    });
-    if (response.ok) {
-      return;
-    }
-  } catch {
-    // Fall back below for older helpers that do not expose /api/open-url yet.
-  }
-
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch {
-    const fallback = document.createElement("textarea");
-    fallback.value = value;
-    fallback.style.position = "fixed";
-    fallback.style.opacity = "0";
-    document.body.appendChild(fallback);
-    fallback.select();
-    document.execCommand("copy");
-    document.body.removeChild(fallback);
-  }
 }
 
 export default function App() {
@@ -147,9 +102,7 @@ export default function App() {
 
   async function refresh() {
     try {
-      const response = await fetch(apiUrl("/api/summary"));
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      setSummary(await response.json());
+      setSummary(await getJson<DashboardSummary>("/api/summary"));
       setError(null);
     } catch (requestError) {
       setError(`Helper API offline or unavailable: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
@@ -162,13 +115,7 @@ export default function App() {
 
   async function startRuntimeInstall(kind: RuntimeKind, version?: string, force = false): Promise<RuntimeInstallJob | undefined> {
     try {
-      const response = await fetch(apiUrl("/api/runtimes/install"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, version, force })
-      });
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      const payload = (await response.json()) as { job: RuntimeInstallJob };
+      const payload = await postJson<{ job: RuntimeInstallJob }>("/api/runtimes/install", { kind, version, force });
       setInstallJobs((current) => ({ ...current, [payload.job.id]: payload.job }));
       setError(null);
       return payload.job;
@@ -187,13 +134,7 @@ export default function App() {
   async function request(path: string, body: Record<string, unknown> = {}) {
     setBusy(true);
     try {
-      const response = await fetch(apiUrl(path), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      const payload = await response.json();
+      const payload = await postJson<unknown>(path, body);
       await refresh();
       setError(null);
       return payload as unknown;
@@ -1019,9 +960,7 @@ function Services({
     async function loadPhpSettings() {
       setPhpSettingsLoading(true);
       try {
-        const response = await fetch(apiUrl(`/api/php/settings?version=${encodeURIComponent(phpVersion)}`));
-        if (!response.ok) throw new Error(await responseErrorMessage(response));
-        const payload = (await response.json()) as PhpSettingsStatus;
+        const payload = await getJson<PhpSettingsStatus>(`/api/php/settings?version=${encodeURIComponent(phpVersion)}`);
         if (!cancelled) {
           setPhpSettings(payload.settings);
           setPhpExtensions(payload.extensions);
@@ -2095,9 +2034,7 @@ function NewSitePanel({
 
     async function pollCreationJob() {
       try {
-        const response = await fetch(apiUrl(`/api/sites/create/jobs/${encodeURIComponent(activeJobId)}`));
-        if (!response.ok) throw new Error(await responseErrorMessage(response));
-        const payload = (await response.json()) as { job: SiteCreationJob };
+        const payload = await getJson<{ job: SiteCreationJob }>(`/api/sites/create/jobs/${encodeURIComponent(activeJobId)}`);
         if (cancelled) {
           return;
         }
@@ -2150,9 +2087,7 @@ function NewSitePanel({
   async function loadInstallerStatus() {
     setInstallerBusy(true);
     try {
-      const response = await fetch(apiUrl("/api/laravel-installer/status"));
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      setInstallerStatus((await response.json()) as LaravelInstallerStatus);
+      setInstallerStatus(await getJson<LaravelInstallerStatus>("/api/laravel-installer/status"));
       setPanelError(null);
     } catch (error) {
       setPanelError(`Installer status failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2198,24 +2133,18 @@ function NewSitePanel({
       updatedAt: new Date().toISOString()
     });
     try {
-      const response = await fetch(apiUrl("/api/sites/create"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          parentPath,
-          preset,
-          starterKit,
-          auth,
-          database,
-          packageManager,
-          testing,
-          git,
-          boost
-        })
+      const payload = await postJson<{ job?: SiteCreationJob }>("/api/sites/create", {
+        name,
+        parentPath,
+        preset,
+        starterKit,
+        auth,
+        database,
+        packageManager,
+        testing,
+        git,
+        boost
       });
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      const payload = (await response.json()) as { job?: SiteCreationJob };
       if (!payload.job) {
         throw new Error("Site creation job was not returned.");
       }
@@ -2801,9 +2730,7 @@ function Php({ summary, post, busy }: ViewProps) {
     async function loadPhpSettings() {
       setSettingsLoading(true);
       try {
-        const response = await fetch(apiUrl(`/api/php/settings?version=${encodeURIComponent(version)}`));
-        if (!response.ok) throw new Error(await responseErrorMessage(response));
-        const payload = (await response.json()) as PhpSettingsStatus;
+        const payload = await getJson<PhpSettingsStatus>(`/api/php/settings?version=${encodeURIComponent(version)}`);
         if (!cancelled) {
           setPhpSettings(payload.settings);
           setExtensions(payload.extensions);
@@ -3491,9 +3418,7 @@ function SettingsView({
   async function loadLaravelInstallerStatus() {
     setInstallerBusy(true);
     try {
-      const response = await fetch(apiUrl("/api/laravel-installer/status"));
-      if (!response.ok) throw new Error(await responseErrorMessage(response));
-      setInstallerStatus((await response.json()) as LaravelInstallerStatus);
+      setInstallerStatus(await getJson<LaravelInstallerStatus>("/api/laravel-installer/status"));
     } finally {
       setInstallerBusy(false);
     }
@@ -3536,6 +3461,8 @@ function SettingsView({
         <SettingsStat icon={ShieldCheck} label="SSL CA" value={summary.ssl.trusted ? "Trusted" : "Untrusted"} tone={summary.ssl.trusted ? "green" : "amber"} />
         <SettingsStat icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} />
       </div>
+
+      <HealthCheckPanel summary={summary} post={post} busy={busy} />
 
       <div className="settings-layout">
         <section className="settings-panel">
@@ -3938,33 +3865,6 @@ function RuntimeProgress({ job }: { job: RuntimeInstallJob }) {
       </div>
     </div>
   );
-}
-
-async function responseErrorMessage(response: Response): Promise<string> {
-  const raw = await response.text();
-  if (!raw) {
-    return `${response.status} ${response.statusText}`;
-  }
-
-  try {
-    const payload = JSON.parse(raw) as { error?: unknown };
-    if (typeof payload.error === "string") {
-      return payload.error;
-    }
-  } catch {
-    // Keep the raw response below when it is not JSON.
-  }
-
-  return raw;
-}
-
-async function fetchRuntimeInstallJob(id: string): Promise<RuntimeInstallJob> {
-  const response = await fetch(apiUrl(`/api/runtimes/jobs/${encodeURIComponent(id)}`));
-  if (!response.ok) {
-    throw new Error(await responseErrorMessage(response));
-  }
-  const payload = (await response.json()) as { job: RuntimeInstallJob };
-  return payload.job;
 }
 
 function latestRuntimeJob(jobs: RuntimeInstallJob[], kind: RuntimeKind, version: string): RuntimeInstallJob | undefined {

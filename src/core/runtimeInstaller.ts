@@ -1,4 +1,5 @@
-import { createWriteStream, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -19,15 +20,50 @@ export interface DownloadProgress {
 
 export interface DownloadOptions {
   onProgress?: (progress: DownloadProgress) => void;
+  retries?: number;
+  retryDelayMs?: number;
+  checksumSha256?: string;
+  timeoutMs?: number;
 }
 
 export async function downloadFile(url: string, destination: string, scope: string, options: DownloadOptions = {}): Promise<void> {
   await mkdir(path.dirname(destination), { recursive: true });
-  await appendLog(scope, `download started: ${url}`);
+  const maxAttempts = Math.max(1, 1 + Math.max(0, options.retries ?? 2));
+  let lastError: unknown;
 
-  const response = await fetchWithRedirects(url);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await downloadFileAttempt(url, destination, scope, attempt, maxAttempts, options);
+      return;
+    } catch (error) {
+      lastError = error;
+      await cleanupPartialDownload(destination);
+      if (attempt < maxAttempts) {
+        await appendLog(scope, `download retry ${attempt}/${maxAttempts - 1}: ${error instanceof Error ? error.message : String(error)}`);
+        await delay((options.retryDelayMs ?? 500) * attempt);
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function downloadFileAttempt(
+  url: string,
+  destination: string,
+  scope: string,
+  attempt: number,
+  maxAttempts: number,
+  options: DownloadOptions
+): Promise<void> {
+  await appendLog(scope, `download started: ${url}${maxAttempts > 1 ? ` (attempt ${attempt}/${maxAttempts})` : ""}`);
+  const tempDestination = partialDownloadPath(destination);
+  await rm(tempDestination, { force: true });
+
+  const response = await fetchWithRedirects(url, 5, options.timeoutMs);
   const statusCode = response.statusCode ?? 0;
   if (statusCode < 200 || statusCode >= 300) {
+    response.resume();
     throw new Error(`Download failed with HTTP ${statusCode}: ${url}`);
   }
 
@@ -56,9 +92,25 @@ export async function downloadFile(url: string, destination: string, scope: stri
     }
   });
 
-  await pipeline(response, progress, createWriteStream(destination));
+  await pipeline(response, progress, createWriteStream(tempDestination));
+  if (options.checksumSha256) {
+    await verifyFileSha256(tempDestination, options.checksumSha256);
+  }
+  await rm(destination, { force: true });
+  await rename(tempDestination, destination);
   options.onProgress?.({ bytesDownloaded, totalBytes, percent: totalBytes ? 100 : undefined, etaSeconds: 0 });
   await appendLog(scope, `download complete: ${destination}`);
+}
+
+export async function verifyFileSha256(filePath: string, expectedSha256: string): Promise<void> {
+  const actualSha256 = await sha256File(filePath);
+  if (actualSha256.toLowerCase() !== expectedSha256.toLowerCase()) {
+    throw new Error(`Checksum mismatch for ${filePath}. Expected ${expectedSha256}, got ${actualSha256}.`);
+  }
+}
+
+export function partialDownloadPath(destination: string): string {
+  return `${destination}.part`;
 }
 
 export async function extractZip(zipPath: string, destination: string, scope: string): Promise<void> {
@@ -105,7 +157,7 @@ export function downloadsDir(): string {
   return path.join(getPaths().home, "downloads");
 }
 
-function fetchWithRedirects(url: string, redirects = 5): Promise<http.IncomingMessage> {
+function fetchWithRedirects(url: string, redirects = 5, timeoutMs = 120000): Promise<http.IncomingMessage> {
   return new Promise((resolve, reject) => {
     const client = url.startsWith("https:") ? https : http;
     const request = client.get(url, (response) => {
@@ -117,14 +169,35 @@ function fetchWithRedirects(url: string, redirects = 5): Promise<http.IncomingMe
           return;
         }
         const nextUrl = new URL(location, url).toString();
-        fetchWithRedirects(nextUrl, redirects - 1).then(resolve, reject);
+        fetchWithRedirects(nextUrl, redirects - 1, timeoutMs).then(resolve, reject);
         return;
       }
 
       resolve(response);
     });
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Download timed out after ${Math.round(timeoutMs / 1000)}s: ${url}`));
+    });
     request.once("error", reject);
   });
+}
+
+function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("error", reject);
+    stream.once("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function cleanupPartialDownload(destination: string): Promise<void> {
+  await rm(partialDownloadPath(destination), { force: true });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parseContentLength(value: string | string[] | undefined): number | undefined {

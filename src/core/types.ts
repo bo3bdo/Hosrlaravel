@@ -176,6 +176,7 @@ export interface RuntimeManifestEntry {
   version: string;
   packageVersion?: string;
   downloadUrl: string;
+  checksumSha256?: string;
   archiveType: "zip" | "file";
   root: string;
   binary: string;

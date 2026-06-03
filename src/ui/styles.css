@@ -1221,6 +1221,58 @@ tr:last-child td {
   line-height: 1.1;
 }
 
+.health-panel {
+  gap: 8px;
+}
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.health-item {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #10151a;
+  padding: 7px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.health-item.green svg {
+  color: var(--green);
+}
+
+.health-item.amber svg {
+  color: var(--amber);
+}
+
+.health-item.red svg {
+  color: var(--red);
+}
+
+.health-item div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.health-item strong,
+.health-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-item span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .settings-layout {
   display: grid;
   grid-template-columns: minmax(330px, 0.9fr) minmax(390px, 1.1fr);
@@ -2765,6 +2817,7 @@ tr:last-child td {
   .services-workbench,
   .service-tabs,
   .database-workbench,
+  .health-grid,
   .settings-overview,
   .settings-layout,
   .settings-form-grid,
