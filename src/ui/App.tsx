@@ -52,7 +52,8 @@ import type {
   ServiceStatus,
   SiteCreationJob,
   Site,
-  SiteCreationResult
+  SiteCreationResult,
+  StartupStatus
 } from "./types.js";
 import { apiUrl, copyTextToClipboard, fetchRuntimeInstallJob, getJson, openExternalUrl, postJson, responseErrorMessage } from "./apiClient.js";
 import { HealthCheckPanel } from "./components/HealthCheckPanel.js";
@@ -3346,6 +3347,8 @@ function SettingsView({
   const [hostsPreview, setHostsPreview] = useState("");
   const [installerStatus, setInstallerStatus] = useState<LaravelInstallerStatus | null>(null);
   const [installerBusy, setInstallerBusy] = useState(false);
+  const [startupStatus, setStartupStatus] = useState<StartupStatus | null>(null);
+  const [startupBusy, setStartupBusy] = useState(false);
 
   const normalizedTld = normalizeLocalTld(tld);
   const tldValid = isValidLocalTld(normalizedTld);
@@ -3366,6 +3369,13 @@ function SettingsView({
       : "Install";
   const installerBadge = laravelInstallerBadge(installerStatus);
   const installerDetail = laravelInstallerDetail(installerStatus);
+  const startupWorking = busy || startupBusy;
+  const launchOnLogin = startupStatus?.launchAppOnLogin ?? summary.config.startup.launchAppOnLogin;
+  const startServicesOnLaunch = startupStatus?.startServicesOnLaunch ?? summary.config.startup.startServicesOnLaunch;
+  const startupSupported = startupStatus?.supported ?? false;
+  const runningServicesCount = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter(
+    (service) => service.state === "running"
+  ).length;
   const pathRows = [
     { label: "Config", value: summary.paths.configFile, icon: FileText, reveal: true },
     { label: "Hosts", value: summary.paths.hostsFile, icon: Network, reveal: true },
@@ -3395,6 +3405,7 @@ function SettingsView({
 
   useEffect(() => {
     void loadLaravelInstallerStatus();
+    void loadStartupStatus();
   }, []);
 
   async function saveGeneralSettings() {
@@ -3423,6 +3434,30 @@ function SettingsView({
   async function trustCa() {
     await post("/api/ssl/trust");
     showToast("Local CA trusted in Windows Root.", "success");
+  }
+
+  async function loadStartupStatus() {
+    setStartupBusy(true);
+    try {
+      setStartupStatus(await getJson<StartupStatus>("/api/startup"));
+    } finally {
+      setStartupBusy(false);
+    }
+  }
+
+  async function saveStartupSetting(patch: Partial<Pick<StartupStatus, "launchAppOnLogin" | "startServicesOnLaunch">>) {
+    setStartupBusy(true);
+    try {
+      const payload = (await request("/api/startup", patch)) as { status?: StartupStatus };
+      if (payload.status) {
+        setStartupStatus(payload.status);
+      } else {
+        await loadStartupStatus();
+      }
+      showToast("Startup settings updated.", "success");
+    } finally {
+      setStartupBusy(false);
+    }
   }
 
   async function loadLaravelInstallerStatus() {
@@ -3519,6 +3554,37 @@ function SettingsView({
             </button>
           </div>
           {!tldValid && tld.trim() ? <span className="settings-warning">Use letters, numbers, or hyphens only.</span> : null}
+        </section>
+
+        <section className="settings-panel">
+          <SettingsPanelHeader icon={ListRestart} title="Startup" detail={`${runningServicesCount}/4 services running`} />
+          <div className="startup-toggle-list">
+            <label className={!startupSupported ? "startup-toggle disabled" : "startup-toggle"}>
+              <input
+                type="checkbox"
+                checked={launchOnLogin}
+                disabled={startupWorking || !startupSupported}
+                onChange={(event) => void saveStartupSetting({ launchAppOnLogin: event.target.checked })}
+              />
+              <span>
+                <strong>Open with Windows</strong>
+                <small>Start minimized in the tray</small>
+              </span>
+            </label>
+            <label className="startup-toggle">
+              <input
+                type="checkbox"
+                checked={startServicesOnLaunch}
+                disabled={startupWorking}
+                onChange={(event) => void saveStartupSetting({ startServicesOnLaunch: event.target.checked })}
+              />
+              <span>
+                <strong>Start services on launch</strong>
+                <small>Nginx, PHP, database, and Redis</small>
+              </span>
+            </label>
+          </div>
+          {startupStatus?.message ? <span className="settings-warning startup-message">{startupStatus.message}</span> : null}
         </section>
 
         <section className="settings-panel wide-settings-panel">

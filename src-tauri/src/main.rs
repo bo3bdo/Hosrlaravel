@@ -40,6 +40,9 @@ pub fn run() {
             app.manage(ApiProcess(Mutex::new(child?)));
             app.manage(AppExit(AtomicBool::new(false)));
             setup_tray(app)?;
+            if launch_hidden() {
+                hide_main_window(app.handle());
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -180,6 +183,7 @@ fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std:
         .env("LARABOXS_API_PORT", API_PORT.to_string())
         .env("NODE_ENV", "production")
         .env("LARABOXS_HELPER_APP_DIR", resource_dir.join("app"))
+        .env("LARABOXS_DESKTOP_EXE", current_exe_path())
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
@@ -232,6 +236,16 @@ fn normalize_windows_path(path: PathBuf) -> PathBuf {
     }
 
     path
+}
+
+fn launch_hidden() -> bool {
+    env::args().any(|arg| arg == "--hidden" || arg == "--startup")
+}
+
+fn current_exe_path() -> PathBuf {
+    env::current_exe()
+        .map(normalize_windows_path)
+        .unwrap_or_else(|_| PathBuf::new())
 }
 
 fn wait_for_helper_api(child: &mut Child) {

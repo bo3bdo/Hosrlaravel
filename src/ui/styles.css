@@ -1389,6 +1389,57 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.startup-toggle-list {
+  display: grid;
+  gap: 6px;
+}
+
+.startup-toggle {
+  min-height: 44px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.startup-toggle.disabled {
+  opacity: 0.68;
+}
+
+.startup-toggle input {
+  min-height: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.startup-toggle span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.startup-toggle strong,
+.startup-toggle small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.startup-toggle small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.startup-message {
+  color: var(--amber);
+}
+
 .installer-tool-card {
   min-height: 48px;
   min-width: 0;

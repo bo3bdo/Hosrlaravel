@@ -3,6 +3,7 @@ export type ServiceState = "running" | "stopped" | "unknown";
 
 export interface LaraboxsConfig {
   setupComplete: boolean;
+  startup: StartupSettings;
   tld: string;
   parkedFolders: string[];
   globalPhpVersion: string;
@@ -26,6 +27,11 @@ export interface LaraboxsConfig {
     version: string;
     port: number;
   };
+}
+
+export interface StartupSettings {
+  launchAppOnLogin: boolean;
+  startServicesOnLaunch: boolean;
 }
 
 export interface PhpConfig {
@@ -215,4 +221,12 @@ export interface DashboardSummary {
   phpMyAdmin: PhpMyAdminStatus;
   ssl: SslTrustStatus;
   logs: string[];
+}
+
+export interface StartupStatus extends StartupSettings {
+  platform: string;
+  supported: boolean;
+  launchCommand?: string;
+  intendedLaunchCommand?: string;
+  message?: string;
 }

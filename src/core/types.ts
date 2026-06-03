@@ -20,6 +20,11 @@ export interface RedisConfig {
   port: number;
 }
 
+export interface StartupSettings {
+  launchAppOnLogin: boolean;
+  startServicesOnLaunch: boolean;
+}
+
 export interface PhpConfig {
   memoryLimit: string;
   uploadMaxFilesize: string;
@@ -34,6 +39,7 @@ export interface PhpConfig {
 export interface LaraboxsConfig {
   version: 1;
   setupComplete: boolean;
+  startup: StartupSettings;
   tld: string;
   parkedFolders: string[];
   globalPhpVersion: string;
@@ -256,6 +262,14 @@ export interface DashboardSummary {
   phpMyAdmin: PhpMyAdminStatus;
   ssl: SslTrustStatus;
   logs: string[];
+}
+
+export interface StartupStatus extends StartupSettings {
+  platform: NodeJS.Platform;
+  supported: boolean;
+  launchCommand?: string;
+  intendedLaunchCommand?: string;
+  message?: string;
 }
 
 export interface CommandSpec {

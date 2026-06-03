@@ -36,6 +36,7 @@ import { getDashboardSummary } from "../core/summary.js";
 import { readSitePreviewImage } from "../core/sitePreview.js";
 import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
 import { clearLogs } from "../core/logging.js";
+import { getStartupStatus, startConfiguredServicesOnLaunch, updateStartupSettings } from "../core/startup.js";
 import type { NewSiteRequest, RuntimeKind, ServiceAction } from "../core/types.js";
 import { getSiteCreationJob, startSiteCreationJob } from "./siteJobs.js";
 import { ApiHttpError, apiSecurityHeaders, assertTrustedApiRequest, corsOrigin, maxJsonBodyBytes, statusForError } from "./httpSecurity.js";
@@ -93,6 +94,18 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/summary") {
       await sendJson(response, await getDashboardSummary());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/startup") {
+      await sendJson(response, await getStartupStatus());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/startup") {
+      const body = await readJson(request);
+      const status = await updateStartupSettings(assertStartupSettings(body));
+      await sendJson(response, { ok: true, status, summary: await getDashboardSummary() });
       return;
     }
 
@@ -524,6 +537,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, host, () => {
   console.log(`laraboxs helper API listening on http://${host}:${port}`);
   void ensureDeveloperCommandPath();
+  void startConfiguredServicesOnLaunch();
 });
 
 const shutdownTasks: Array<() => Promise<void> | void> = [];
@@ -796,6 +810,18 @@ function assertGeneralSettings(value: unknown) {
   return {
     tld: typeof input.tld === "string" ? assertLocalTld(input.tld) : undefined,
     setupComplete: typeof input.setupComplete === "boolean" ? input.setupComplete : undefined
+  };
+}
+
+function assertStartupSettings(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiHttpError(400, "Startup settings are required.");
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    launchAppOnLogin: typeof input.launchAppOnLogin === "boolean" ? input.launchAppOnLogin : undefined,
+    startServicesOnLaunch: typeof input.startServicesOnLaunch === "boolean" ? input.startServicesOnLaunch : undefined
   };
 }
 

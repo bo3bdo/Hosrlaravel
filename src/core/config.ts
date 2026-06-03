@@ -53,6 +53,10 @@ export function defaultConfig(): LaraboxsConfig {
   return {
     version: 1,
     setupComplete: false,
+    startup: {
+      launchAppOnLogin: false,
+      startServicesOnLaunch: false
+    },
     tld: "test",
     parkedFolders: [],
     globalPhpVersion: "8.5",
@@ -126,10 +130,15 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
 
   const securedDomains = Array.from(new Set(input.securedDomains ?? defaults.securedDomains)).sort();
   const inputPhp: Partial<LaraboxsConfig["php"]> = input.php ?? {};
+  const inputStartup: Partial<LaraboxsConfig["startup"]> = input.startup ?? {};
 
   return {
     version: 1,
     setupComplete: input.setupComplete ?? defaults.setupComplete,
+    startup: {
+      launchAppOnLogin: inputStartup.launchAppOnLogin ?? defaults.startup.launchAppOnLogin,
+      startServicesOnLaunch: inputStartup.startServicesOnLaunch ?? defaults.startup.startServicesOnLaunch
+    },
     tld: input.tld ?? defaults.tld,
     parkedFolders,
     globalPhpVersion: input.globalPhpVersion ?? defaults.globalPhpVersion,
