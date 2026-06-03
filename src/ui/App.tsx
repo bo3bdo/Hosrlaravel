@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   BadgeCheck,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  CircleAlert,
   Clipboard,
   Database,
   Download,
@@ -15,6 +17,8 @@ import {
   Globe,
   HardDrive,
   KeyRound,
+  Languages,
+  LayoutDashboard,
   ListRestart,
   LoaderCircle,
   Lock,
@@ -60,10 +64,21 @@ import { HealthCheckPanel } from "./components/HealthCheckPanel.js";
 import { ToastContainer } from "./components/ToastContainer.js";
 import { useToasts, showToast } from "./components/useToasts.js";
 
-type Section = "sites" | "services" | "logs" | "settings";
+type Section = "dashboard" | "sites" | "services" | "logs" | "settings";
 type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
 type DatabaseEngine = "mysql" | "mariadb";
 type RuntimeJobMap = Record<string, RuntimeInstallJob>;
+type AppLanguage = "en" | "ar";
+type SiteHealthStatus = {
+  domain: string;
+  url: string;
+  state: "ok" | "error";
+  statusCode?: number;
+  statusMessage?: string;
+  message: string;
+  responseTimeMs: number;
+  checkedAt: string;
+};
 type WizardStepId = "folder" | "install" | "finish";
 type WizardTaskStatus = "pending" | "running" | "complete" | "failed";
 type WizardTaskState = { status: WizardTaskStatus; message?: string };
@@ -75,12 +90,32 @@ type WizardTaskDefinition = {
   runtime?: { kind: RuntimeKind; version?: string };
 };
 
-const sections: Array<{ id: Section; label: string; icon: typeof Globe }> = [
-  { id: "sites", label: "Sites", icon: Globe },
-  { id: "services", label: "Services", icon: Server },
-  { id: "logs", label: "Logs", icon: FileText },
-  { id: "settings", label: "Settings", icon: Settings }
+const sections: Array<{ id: Section; label: string; labelAr: string; icon: typeof Globe }> = [
+  { id: "dashboard", label: "Dashboard", labelAr: "لوحة التحكم", icon: LayoutDashboard },
+  { id: "sites", label: "Sites", labelAr: "المواقع", icon: Globe },
+  { id: "services", label: "Services", labelAr: "الخدمات", icon: Server },
+  { id: "logs", label: "Logs", labelAr: "السجلات", icon: FileText },
+  { id: "settings", label: "Settings", labelAr: "الإعدادات", icon: Settings }
 ];
+
+const shellCopy = {
+  en: {
+    brandSubtitle: "Windows local dev",
+    refresh: "Refresh",
+    loading: "Loading laraboxs state...",
+    languageButton: "AR"
+  },
+  ar: {
+    brandSubtitle: "بيئة تطوير ويندوز",
+    refresh: "تحديث",
+    loading: "جار تحميل حالة laraboxs...",
+    languageButton: "EN"
+  }
+} satisfies Record<AppLanguage, Record<string, string>>;
+
+function sectionLabel(section: { label: string; labelAr: string }, language: AppLanguage): string {
+  return language === "ar" ? section.labelAr : section.label;
+}
 
 function serviceBadgeForSection(sectionId: Section, summary: DashboardSummary): JSX.Element | null {
   if (sectionId === "services") {
@@ -95,7 +130,8 @@ function serviceBadgeForSection(sectionId: Section, summary: DashboardSummary): 
 
 export default function App() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [section, setSection] = useState<Section>("sites");
+  const [section, setSection] = useState<Section>("dashboard");
+  const [language, setLanguage] = useState<AppLanguage>("en");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installJobs, setInstallJobs] = useState<RuntimeJobMap>({});
@@ -206,6 +242,8 @@ export default function App() {
   }, [activeJobKey]);
 
   const active = useMemo(() => sections.find((item) => item.id === section)!, [section]);
+  const activeLabel = sectionLabel(active, language);
+  const copy = shellCopy[language];
 
   if (!summary) {
     return <BootScreen error={error} busy={busy} refresh={refresh} />;
@@ -222,7 +260,7 @@ export default function App() {
         busy={busy}
         error={error}
         onFinish={() => {
-          setSection("sites");
+          setSection("dashboard");
           void refresh();
         }}
       />
@@ -230,13 +268,13 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${language === "ar" ? "rtl" : ""}`} dir={language === "ar" ? "rtl" : "ltr"}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">L</div>
           <div>
             <strong>laraboxs</strong>
-            <span>Windows local dev</span>
+            <span>{copy.brandSubtitle}</span>
           </div>
         </div>
         <nav>
@@ -246,7 +284,7 @@ export default function App() {
             return (
               <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}>
                 <Icon size={18} />
-                <span>{item.label}</span>
+                <span>{sectionLabel(item, language)}</span>
                 {badge ?? null}
               </button>
             );
@@ -257,22 +295,29 @@ export default function App() {
       <main>
         <header className="topbar">
           <div>
-            <span className="eyebrow">{active.label}</span>
-            <h1>{active.label}</h1>
+            <span className="eyebrow">{activeLabel}</span>
+            <h1>{activeLabel}</h1>
           </div>
-          <button className="icon-button" onClick={() => void refresh()} disabled={busy} title="Refresh">
-            <RotateCw size={18} />
-            <span>Refresh</span>
-          </button>
+          <div className="topbar-actions">
+            <button className="icon-button" onClick={() => setLanguage((current) => (current === "en" ? "ar" : "en"))} title="Toggle language">
+              <Languages size={18} />
+              <span>{copy.languageButton}</span>
+            </button>
+            <button className="icon-button" onClick={() => void refresh()} disabled={busy} title="Refresh">
+              <RotateCw size={18} />
+              <span>{copy.refresh}</span>
+            </button>
+          </div>
         </header>
 
         {error ? <div className="notice">{error}</div> : null}
 
         {!summary ? (
-          <div className="empty-state">Loading laraboxs state...</div>
+          <div className="empty-state">{copy.loading}</div>
         ) : (
           <section className="content">
-            {section === "sites" ? <Sites summary={summary} post={post} request={request} busy={busy} /> : null}
+            {section === "dashboard" ? <Dashboard summary={summary} post={post} busy={busy} onNavigate={setSection} language={language} /> : null}
+            {section === "sites" ? <Sites summary={summary} post={post} request={request} busy={busy} onNavigate={setSection} /> : null}
             {section === "services" ? (
               <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
             ) : null}
@@ -310,6 +355,274 @@ function BootScreen({ error, busy, refresh }: { error: string | null; busy: bool
           <span>Retry</span>
         </button>
       </div>
+    </div>
+  );
+}
+
+type LogSeverity = "info" | "warning" | "error";
+
+function logSeverity(line: string): LogSeverity {
+  if (/\b(error|failed|denied|refusing|timed out|aborted connection)\b/i.test(line)) {
+    return "error";
+  }
+  if (/\b(warn|warning|untrusted|fallback|reduced|unauthenticated)\b/i.test(line)) {
+    return "warning";
+  }
+  return "info";
+}
+
+function logService(line: string): string {
+  const timestamped = line.match(/^\[[^\]]+\]\s+\[([^\]]+)\]/);
+  const simple = line.match(/^\[([^\]]+)\]/);
+  return (timestamped?.[1] ?? simple?.[1] ?? "app").toLowerCase();
+}
+
+function Dashboard({
+  summary,
+  post,
+  busy,
+  onNavigate,
+  language
+}: ViewProps & {
+  onNavigate: (section: Section) => void;
+  language: AppLanguage;
+}) {
+  const selectedPhp = summary.runtimes.php.find((runtime) => runtime.version === summary.config.globalPhpVersion);
+  const selectedDatabase = selectedMysqlRuntime(summary, summary.config.mysql.version);
+  const runningServices = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter(
+    (service) => service.state === "running"
+  ).length;
+  const coreRuntimes = [selectedPhp, selectedDatabase, summary.runtimes.nginx, summary.runtimes.node, summary.runtimes.composer].filter(
+    Boolean
+  ) as RuntimeInstallStatus[];
+  const installedCoreCount = coreRuntimes.filter((runtime) => runtime.installed).length;
+  const securedSites = summary.sites.filter((site) => site.secured).length;
+  const warningLogs = summary.logs.filter((line) => logSeverity(line) !== "info");
+  const stackReady = runningServices === 4 && installedCoreCount === coreRuntimes.length && summary.ssl.trusted;
+  const copy =
+    language === "ar"
+      ? {
+          ready: "البيئة المحلية جاهزة",
+          needsWork: "البيئة تحتاج انتباه",
+          subtitle: "ملخص سريع للخدمات، المواقع، والتحذيرات قبل تبدأ الشغل.",
+          nextAction: "الإجراء التالي",
+          startStack: "تشغيل الخدمات",
+          startStackDetail: "شغّل PHP وNginx وقاعدة البيانات وRedis المتاحة.",
+          trustCa: "توثيق SSL",
+          trustCaDetail: "وثّق شهادة laraboxs المحلية في ويندوز.",
+          syncHosts: "مزامنة Hosts",
+          syncHostsDetail: "حدّث الدومينات المحلية للمواقع.",
+          reviewLogs: "مراجعة السجلات",
+          reviewLogsDetail: "افتح التحذيرات الأخيرة وشخّصها.",
+          openSites: "فتح المواقع",
+          openSitesDetail: "ابدأ من قائمة المواقع والمعاينة.",
+          stack: "الخدمات",
+          runtimes: "الأدوات",
+          sites: "المواقع",
+          warnings: "تحذيرات",
+          health: "الفحص السريع",
+          recentWarnings: "آخر التحذيرات"
+        }
+      : {
+          ready: "Local stack is ready",
+          needsWork: "Local stack needs attention",
+          subtitle: "A quick read on services, sites, and warnings before you start working.",
+          nextAction: "Next Action",
+          startStack: "Start Stack",
+          startStackDetail: "Start available PHP, Nginx, database, and Redis services.",
+          trustCa: "Trust SSL",
+          trustCaDetail: "Trust the laraboxs local CA in Windows.",
+          syncHosts: "Sync Hosts",
+          syncHostsDetail: "Refresh local domains for parked sites.",
+          reviewLogs: "Review Logs",
+          reviewLogsDetail: "Open recent warnings and diagnose them.",
+          openSites: "Open Sites",
+          openSitesDetail: "Start from the site list and preview.",
+          stack: "Services",
+          runtimes: "Runtimes",
+          sites: "Sites",
+          warnings: "Warnings",
+          health: "Health Check",
+          recentWarnings: "Recent Warnings"
+        };
+
+  const canStartInstalledStack = Boolean(selectedPhp?.installed && selectedDatabase?.installed && summary.runtimes.nginx.installed);
+
+  async function startInstalledStack() {
+    if (selectedPhp?.installed && summary.services.php.state !== "running") {
+      await post("/api/php-fcgi/start");
+    }
+    if (selectedDatabase?.installed && summary.services.mysql.state !== "running") {
+      await post("/api/mysql/start");
+    }
+    if (summary.runtimes.redis.installed && summary.services.redis.state !== "running") {
+      await post("/api/redis/start");
+    }
+    if (summary.runtimes.nginx.installed && summary.services.nginx.state !== "running") {
+      await post("/api/nginx/start");
+    }
+  }
+
+  const nextActions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    icon: typeof Globe;
+    primary?: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+  }> = [];
+
+  if (runningServices < 4) {
+    nextActions.push({
+      id: "start-stack",
+      label: copy.startStack,
+      detail: copy.startStackDetail,
+      icon: Play,
+      primary: true,
+      disabled: busy || !canStartInstalledStack,
+      onClick: () => void startInstalledStack()
+    });
+  }
+  if (securedSites > 0 && !summary.ssl.trusted) {
+    nextActions.push({
+      id: "trust-ca",
+      label: copy.trustCa,
+      detail: copy.trustCaDetail,
+      icon: ShieldCheck,
+      primary: nextActions.length === 0,
+      disabled: busy || summary.ssl.platform !== "win32",
+      onClick: () => void post("/api/ssl/trust")
+    });
+  }
+  if (summary.sites.length > 0) {
+    nextActions.push({
+      id: "sync-hosts",
+      label: copy.syncHosts,
+      detail: copy.syncHostsDetail,
+      icon: Network,
+      primary: nextActions.length === 0 && !stackReady,
+      disabled: busy,
+      onClick: () => void post("/api/hosts/sync", {})
+    });
+  }
+  if (warningLogs.length > 0) {
+    nextActions.push({
+      id: "review-logs",
+      label: copy.reviewLogs,
+      detail: copy.reviewLogsDetail,
+      icon: FileText,
+      primary: nextActions.length === 0,
+      onClick: () => onNavigate("logs")
+    });
+  }
+  if (nextActions.length === 0) {
+    nextActions.push({
+      id: "open-sites",
+      label: copy.openSites,
+      detail: copy.openSitesDetail,
+      icon: Globe,
+      primary: true,
+      onClick: () => onNavigate("sites")
+    });
+  }
+
+  return (
+    <div className="dashboard-view">
+      <section className={`dashboard-hero ${stackReady ? "ready" : "attention"}`}>
+        <div className="dashboard-hero-copy">
+          <span className="eyebrow">{copy.health}</span>
+          <h2>{stackReady ? copy.ready : copy.needsWork}</h2>
+          <p>{copy.subtitle}</p>
+        </div>
+        <div className="dashboard-metrics">
+          <DashboardMetric icon={Play} label={copy.stack} value={`${runningServices}/4`} tone={runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red"} />
+          <DashboardMetric icon={PackageCheck} label={copy.runtimes} value={`${installedCoreCount}/${coreRuntimes.length}`} tone={installedCoreCount === coreRuntimes.length ? "green" : "amber"} />
+          <DashboardMetric icon={Globe} label={copy.sites} value={String(summary.sites.length)} tone={summary.sites.length ? "green" : "amber"} />
+          <DashboardMetric icon={CircleAlert} label={copy.warnings} value={String(warningLogs.length)} tone={warningLogs.length ? "amber" : "green"} />
+        </div>
+      </section>
+
+      <section className="dashboard-actions-panel">
+        <div className="settings-panel-header">
+          <Activity size={18} />
+          <div>
+            <strong>{copy.nextAction}</strong>
+            <span>{nextActions[0]?.detail}</span>
+          </div>
+        </div>
+        <div className="dashboard-action-grid">
+          {nextActions.slice(0, 4).map((action) => {
+            const Icon = action.icon;
+            return (
+              <button key={action.id} className={action.primary ? "dashboard-action primary" : "dashboard-action"} disabled={action.disabled} onClick={action.onClick}>
+                <Icon size={18} />
+                <span>
+                  <strong>{action.label}</strong>
+                  <small>{action.detail}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="dashboard-main-grid">
+        <HealthCheckPanel summary={summary} post={post} busy={busy} />
+        <section className="settings-panel dashboard-service-panel">
+          <SettingsPanelHeader icon={Server} title="Services" detail={`${runningServices}/4 core services running`} />
+          <div className="dashboard-service-grid">
+            <ServiceStrip service={summary.services.php} />
+            <ServiceStrip service={summary.services.nginx} />
+            <ServiceStrip service={summary.services.mysql} />
+            <ServiceStrip service={summary.services.redis} />
+          </div>
+          <div className="settings-actions">
+            <button onClick={() => onNavigate("services")}>
+              <Server size={16} />
+              <span>Open Services</span>
+            </button>
+          </div>
+        </section>
+        <section className="settings-panel dashboard-service-panel">
+          <SettingsPanelHeader icon={FileText} title={copy.recentWarnings} detail={warningLogs.length ? `${warningLogs.length} warnings found` : "No warning lines detected"} />
+          <div className="dashboard-warning-list">
+            {warningLogs.slice(-5).reverse().map((line, index) => (
+              <div key={`${line}-${index}`} className={`dashboard-warning-line ${logSeverity(line)}`}>
+                <span>{logService(line)}</span>
+                <p>{line}</p>
+              </div>
+            ))}
+            {!warningLogs.length ? <div className="settings-empty-row">No recent warnings.</div> : null}
+          </div>
+          <div className="settings-actions">
+            <button onClick={() => onNavigate("logs")}>
+              <FileText size={16} />
+              <span>Open Logs</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function DashboardMetric({
+  icon: Icon,
+  label,
+  value,
+  tone
+}: {
+  icon: typeof Globe;
+  label: string;
+  value: string;
+  tone: "green" | "amber" | "red";
+}) {
+  return (
+    <div className={`dashboard-metric ${tone}`}>
+      <Icon size={18} />
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -873,6 +1186,19 @@ function defaultSitesFolder(summary: DashboardSummary): string {
 function pathTail(folder: string): string {
   const trimmed = folder.trim().replace(/[\\/]+$/g, "");
   return trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+}
+
+function normalizeSiteName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function joinWindowsPath(parent: string, child: string): string {
+  const base = parent.trim().replace(/[\\/]+$/g, "");
+  return child ? `${base}\\${child}` : base;
 }
 
 function taskDefinitionsLabel(summary: DashboardSummary, phpVersion: string, mysqlVersion: string): string {
@@ -1731,7 +2057,16 @@ function DatabaseRuntimePanel({
   );
 }
 
-function Sites({ summary, post, request, busy }: ViewProps & { request: (path: string, body?: Record<string, unknown>) => Promise<unknown> }) {
+function Sites({
+  summary,
+  post,
+  request,
+  busy,
+  onNavigate
+}: ViewProps & {
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  onNavigate: (section: Section) => void;
+}) {
   const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
   const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
   const [siteTab, setSiteTab] = useState<"general" | "information">("general");
@@ -1740,6 +2075,8 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
   const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
   const [entryPath, setEntryPath] = useState(selectedSite?.entryPath ?? ".");
   const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
+  const [siteHealth, setSiteHealth] = useState<SiteHealthStatus | null>(null);
+  const [siteHealthLoading, setSiteHealthLoading] = useState(false);
 
   const filteredSites = summary.sites.filter((site) => {
     const query = siteSearch.trim().toLowerCase();
@@ -1769,6 +2106,46 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
     setEntryPath(selectedSite?.entryPath ?? ".");
     setSitePhpVersion(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
   }, [selectedSite?.domain, selectedSite?.entryPath, selectedSite?.phpVersion, summary.config.globalPhpVersion]);
+
+  useEffect(() => {
+    if (!selectedSite) {
+      setSiteHealth(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSiteHealthLoading(true);
+    setSiteHealth(null);
+
+    async function loadSiteHealth() {
+      try {
+        const payload = await getJson<SiteHealthStatus>(`/api/sites/health?site=${encodeURIComponent(selectedSite!.domain)}`);
+        if (!cancelled) {
+          setSiteHealth(payload);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setSiteHealth({
+            domain: selectedSite!.domain,
+            url: selectedSite!.url,
+            state: "error",
+            message: error instanceof Error ? error.message : String(error),
+            responseTimeMs: 0,
+            checkedAt: new Date().toISOString()
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setSiteHealthLoading(false);
+        }
+      }
+    }
+
+    void loadSiteHealth();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSite?.domain]);
 
   async function saveSelectedEntry(nextEntry = entryPath) {
     if (!selectedSite) {
@@ -1877,6 +2254,9 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
                   <span className={selectedSite.secured ? "site-security-badge secured" : "site-security-badge"}>
                     {selectedSite.secured ? "HTTPS" : "HTTP"}
                   </span>
+                  <span className={siteHealthLoading ? "site-health-badge checking" : siteHealth?.state === "error" ? "site-health-badge error" : "site-health-badge ok"}>
+                    {siteHealthLoading ? "Checking" : siteHealth?.state === "error" ? "Site Error" : "Healthy"}
+                  </span>
                 </div>
               </div>
               <button className={selectedSite.secured ? "" : "primary"} disabled={busy || (selectedSite.secured && !summary.ssl.trusted)} onClick={() => void post(selectedSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: selectedSite.domain })}>
@@ -1891,53 +2271,72 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
             </div>
 
             {siteTab === "general" ? (
-              <div className="site-general-grid">
-                <div className="site-preview-panel">
-                  <SitePreviewImage site={selectedSite} />
-                  <button className="primary" title="Open site" onClick={() => void openExternalUrl(selectedSite.url)}>
-                    <ExternalLink size={18} />
-                    <span>Open Site</span>
-                  </button>
-                </div>
-                <div className="site-controls-panel">
-                  <label>
-                    <span>PHP Version</span>
-                    <select value={sitePhpVersion} onChange={(event) => setSitePhpVersion(event.target.value)}>
-                      {summary.runtimes.php.map((runtime) => (
-                        <option key={runtime.version} value={runtime.version}>
-                          PHP {runtime.version}{runtime.installed ? "" : " (missing)"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button disabled={busy || sitePhpVersion === selectedSite.phpVersion} onClick={() => void saveSelectedPhpVersion()}>
-                    <BadgeCheck size={18} />
-                    <span>Apply PHP</span>
-                  </button>
-                  <label>
-                    <span>Nginx Entry</span>
-                    <input value={entryPath} onChange={(event) => setEntryPath(event.target.value)} />
-                  </label>
-                  <div className="button-row">
-                    <button disabled={busy} onClick={() => setEntryPath(".")}>
-                      <FolderOpen size={18} />
-                      <span>Project Root</span>
+              <>
+                {siteHealth?.state === "error" ? (
+                  <div className="site-attention-panel">
+                    <CircleAlert size={18} />
+                    <div>
+                      <strong>{siteHealth.statusCode ? `HTTP ${siteHealth.statusCode}` : "Site check failed"}</strong>
+                      <span>{siteHealth.message}</span>
+                    </div>
+                    <button onClick={() => void openExternalUrl(selectedSite.url)}>
+                      <ExternalLink size={16} />
+                      <span>Open Site</span>
                     </button>
-                    <button disabled={busy} onClick={() => setEntryPath("public")}>
-                      <FolderOpen size={18} />
-                      <span>public</span>
-                    </button>
-                    <button className="primary" disabled={busy || !entryPath.trim()} onClick={() => void saveSelectedEntry()}>
-                      <BadgeCheck size={18} />
-                      <span>Save Entry</span>
-                    </button>
-                    <button disabled={busy} onClick={() => void resetSelectedEntry()}>
-                      <RotateCw size={18} />
-                      <span>Reset</span>
+                    <button onClick={() => onNavigate("logs")}>
+                      <FileText size={16} />
+                      <span>Open Logs</span>
                     </button>
                   </div>
+                ) : null}
+                <div className="site-general-grid">
+                  <div className="site-preview-panel">
+                    <SitePreviewImage site={selectedSite} />
+                    <button className="primary" title="Open site" onClick={() => void openExternalUrl(selectedSite.url)}>
+                      <ExternalLink size={18} />
+                      <span>Open Site</span>
+                    </button>
+                  </div>
+                  <div className="site-controls-panel">
+                    <label>
+                      <span>PHP Version</span>
+                      <select value={sitePhpVersion} onChange={(event) => setSitePhpVersion(event.target.value)}>
+                        {summary.runtimes.php.map((runtime) => (
+                          <option key={runtime.version} value={runtime.version}>
+                            PHP {runtime.version}{runtime.installed ? "" : " (missing)"}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button disabled={busy || sitePhpVersion === selectedSite.phpVersion} onClick={() => void saveSelectedPhpVersion()}>
+                      <BadgeCheck size={18} />
+                      <span>Apply PHP</span>
+                    </button>
+                    <label>
+                      <span>Nginx Entry</span>
+                      <input value={entryPath} onChange={(event) => setEntryPath(event.target.value)} />
+                    </label>
+                    <div className="button-row">
+                      <button disabled={busy} onClick={() => setEntryPath(".")}>
+                        <FolderOpen size={18} />
+                        <span>Project Root</span>
+                      </button>
+                      <button disabled={busy} onClick={() => setEntryPath("public")}>
+                        <FolderOpen size={18} />
+                        <span>public</span>
+                      </button>
+                      <button className="primary" disabled={busy || !entryPath.trim()} onClick={() => void saveSelectedEntry()}>
+                        <BadgeCheck size={18} />
+                        <span>Save Entry</span>
+                      </button>
+                      <button disabled={busy} onClick={() => void resetSelectedEntry()}>
+                        <RotateCw size={18} />
+                        <span>Reset</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </>
             ) : (
               <dl className="details site-info-details">
                 <dt>Domain</dt>
@@ -2013,6 +2412,36 @@ function NewSitePanel({
         : `Installed ${installerStatus.version ?? ""}`.trim()
       : "Missing";
   const requirementsMessage = installerStatus?.message;
+  const normalizedName = normalizeSiteName(name);
+  const previewName = normalizedName || "my-app";
+  const previewDomain = `${previewName}.${summary.config.tld}`;
+  const previewPath = joinWindowsPath(parentPath || defaultParent, previewName);
+  const commandPreview =
+    preset === "laravel"
+      ? [
+          "laravel",
+          "new",
+          previewName,
+          starterKit !== "none" ? `--${starterKit}` : "",
+          auth !== "default" ? `--auth=${auth}` : "",
+          `--database=${database}`,
+          `--${testing}`,
+          packageManager !== "none" ? `--${packageManager}` : "",
+          git ? "--git" : "",
+          boost ? "--boost" : ""
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : `create ${preset} site ${previewName}`;
+  const previewOptions = [
+    preset === "laravel" ? `starter: ${starterKit}` : "",
+    preset === "laravel" ? `auth: ${auth}` : "",
+    preset === "laravel" ? `db: ${database}` : "",
+    preset === "laravel" ? `tests: ${testing}` : "",
+    preset === "laravel" && packageManager !== "none" ? `node: ${packageManager}` : "",
+    git ? "git" : "",
+    boost ? "boost" : ""
+  ].filter(Boolean);
 
   useEffect(() => {
     if (!parentPath.trim()) {
@@ -2274,17 +2703,35 @@ function NewSitePanel({
               </select>
             </label>
             <div className="new-site-switches">
-              <label className="compact-toggle">
+              <label className="compact-toggle" title="Initialize a Git repository for the new project.">
                 <input type="checkbox" checked={git} onChange={(event) => setGit(event.target.checked)} />
                 <span>Git</span>
               </label>
-              <label className="compact-toggle">
+              <label className="compact-toggle" title="Install Laravel Boost when the selected Laravel stack supports it.">
                 <input type="checkbox" checked={boost} onChange={(event) => setBoost(event.target.checked)} />
                 <span>Boost</span>
               </label>
             </div>
           </>
         ) : null}
+        <div className="new-site-preview-card">
+          <div>
+            <span>Domain</span>
+            <strong>{previewDomain}</strong>
+          </div>
+          <div>
+            <span>Path</span>
+            <strong>{previewPath}</strong>
+          </div>
+          <div>
+            <span>Command</span>
+            <code>{commandPreview}</code>
+          </div>
+          <div>
+            <span>Options</span>
+            <strong>{previewOptions.length ? previewOptions.join(" · ") : "default"}</strong>
+          </div>
+        </div>
       </div>
 
       {panelError || (requirementsMessage && preset === "laravel") ? (
@@ -2296,7 +2743,7 @@ function NewSitePanel({
       <div className="new-site-actions">
         <button className="primary" disabled={working || !canCreate} onClick={() => void createSite()} title="Create site">
           {creating ? <LoaderCircle className="spin" size={18} /> : <PackageCheck size={18} />}
-          <span>{creating ? "Creating" : "Create"}</span>
+          <span>{creating ? "Creating" : "Create & Open"}</span>
         </button>
         <button disabled={working} onClick={onClose} title="Cancel">
           <CircleStop size={18} />
@@ -3284,11 +3731,24 @@ function Redis({
 
 function Logs({ summary, post, busy }: ViewProps) {
   const [copied, setCopied] = useState(false);
-  const logText = summary.logs.join("\n");
-  const displayText = logText || "No log entries yet.";
+  const [query, setQuery] = useState("");
+  const [serviceFilter, setServiceFilter] = useState("all");
+  const [severityFilter, setSeverityFilter] = useState<"all" | LogSeverity>("all");
+  const [latestFirst, setLatestFirst] = useState(false);
+  const services = Array.from(new Set(summary.logs.map(logService))).sort();
+  const filteredLogs = summary.logs.filter((line) => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const matchesQuery = !normalizedQuery || line.toLowerCase().includes(normalizedQuery);
+    const matchesService = serviceFilter === "all" || logService(line) === serviceFilter;
+    const matchesSeverity = severityFilter === "all" || logSeverity(line) === severityFilter;
+    return matchesQuery && matchesService && matchesSeverity;
+  });
+  const visibleLogs = latestFirst ? [...filteredLogs].reverse() : filteredLogs;
+  const displayText = visibleLogs.join("\n") || "No log entries match the current filters.";
   const modelText = [
     "Laraboxs diagnostic log",
     `Generated: ${new Date().toISOString()}`,
+    `Filters: service=${serviceFilter}, severity=${severityFilter}, query=${query.trim() || "none"}`,
     "",
     "```text",
     displayText,
@@ -3313,7 +3773,7 @@ function Logs({ summary, post, busy }: ViewProps) {
       <div className="logs-toolbar">
         <div className="logs-meta">
           <strong>Runtime Logs</strong>
-          <span>{summary.logs.length ? `${summary.logs.length} lines` : "empty"}</span>
+          <span>{summary.logs.length ? `${visibleLogs.length}/${summary.logs.length} lines` : "empty"}</span>
         </div>
         <div className="logs-actions">
           <button disabled={busy} onClick={() => void copyLogs()} title="Copy logs for any model">
@@ -3326,7 +3786,45 @@ function Logs({ summary, post, busy }: ViewProps) {
           </button>
         </div>
       </div>
-      <pre className="logs">{displayText}</pre>
+      <div className="logs-filterbar">
+        <div className="logs-search">
+          <Search size={14} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search logs..." />
+        </div>
+        <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)}>
+          <option value="all">All services</option>
+          {services.map((service) => (
+            <option key={service} value={service}>
+              {service}
+            </option>
+          ))}
+        </select>
+        <select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value as "all" | LogSeverity)}>
+          <option value="all">All severity</option>
+          <option value="error">Errors</option>
+          <option value="warning">Warnings</option>
+          <option value="info">Info</option>
+        </select>
+        <label className="compact-toggle logs-toggle">
+          <input type="checkbox" checked={latestFirst} onChange={(event) => setLatestFirst(event.target.checked)} />
+          <span>Latest first</span>
+        </label>
+      </div>
+      <div className="logs" role="log" aria-label="Filtered runtime logs">
+        {visibleLogs.length ? (
+          visibleLogs.map((line, index) => (
+            <div key={`${line}-${index}`} className={`log-line ${logSeverity(line)}`}>
+              <span>{logService(line)}</span>
+              <p>{line}</p>
+            </div>
+          ))
+        ) : (
+          <div className="log-line info">
+            <span>logs</span>
+            <p>{displayText}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3339,6 +3837,7 @@ function SettingsView({
 }: ViewProps & {
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
 }) {
+  type SettingsPane = "general" | "tools" | "paths" | "security";
   const [tld, setTld] = useState(summary.config.tld);
   const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
   const [phpChoice, setPhpChoice] = useState(summary.config.globalPhpVersion);
@@ -3349,6 +3848,7 @@ function SettingsView({
   const [installerBusy, setInstallerBusy] = useState(false);
   const [startupStatus, setStartupStatus] = useState<StartupStatus | null>(null);
   const [startupBusy, setStartupBusy] = useState(false);
+  const [settingsPane, setSettingsPane] = useState<SettingsPane>("general");
 
   const normalizedTld = normalizeLocalTld(tld);
   const tldValid = isValidLocalTld(normalizedTld);
@@ -3385,6 +3885,12 @@ function SettingsView({
     { label: "Nginx sites", value: summary.paths.nginxSites, icon: FolderOpen },
     { label: "Database data", value: summary.paths.mysqlData, icon: Database },
     { label: "CA certificate", value: summary.ssl.certPath, icon: ShieldCheck, reveal: true }
+  ];
+  const settingsPanes: Array<{ id: SettingsPane; label: string; detail: string; icon: typeof Globe }> = [
+    { id: "general", label: "General", detail: "TLD, PHP, database, and startup", icon: SlidersHorizontal },
+    { id: "tools", label: "Tools", detail: "Laravel Installer and config files", icon: PackageCheck },
+    { id: "paths", label: "Paths", detail: "Parked folders and app files", icon: FolderOpen },
+    { id: "security", label: "Security", detail: "Hosts, SSL, and Defender", icon: Shield }
   ];
 
   useEffect(() => {
@@ -3507,9 +4013,23 @@ function SettingsView({
         <SettingsStat icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} />
       </div>
 
-      <HealthCheckPanel summary={summary} post={post} busy={busy} />
-
+      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        {settingsPanes.map((pane) => {
+          const Icon = pane.icon;
+          return (
+            <button key={pane.id} className={settingsPane === pane.id ? "active" : ""} onClick={() => setSettingsPane(pane.id)}>
+              <Icon size={16} />
+              <span>
+                <strong>{pane.label}</strong>
+                <small>{pane.detail}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
       <div className="settings-layout">
+        {settingsPane === "general" ? (
+          <>
         <section className="settings-panel">
           <SettingsPanelHeader icon={SlidersHorizontal} title="General" detail="Local names and default runtimes" />
           <div className="settings-form-grid">
@@ -3586,7 +4106,11 @@ function SettingsView({
           </div>
           {startupStatus?.message ? <span className="settings-warning startup-message">{startupStatus.message}</span> : null}
         </section>
+          </>
+        ) : null}
 
+        {settingsPane === "tools" ? (
+          <>
         <section className="settings-panel wide-settings-panel">
           <SettingsPanelHeader icon={PackageCheck} title="Laravel Installer" detail="composer global require laravel/installer" />
           <div className="installer-tool-card">
@@ -3628,7 +4152,11 @@ function SettingsView({
           </dl>
           {installerStatus?.message ? <span className="settings-warning">{installerStatus.message}</span> : null}
         </section>
+          </>
+        ) : null}
 
+        {settingsPane === "paths" ? (
+          <>
         <section className="settings-panel">
           <SettingsPanelHeader icon={FolderPlus} title="Sites Folders" detail={`${summary.sites.length} discovered sites`} />
           <div className="inline-form compact-folder-form">
@@ -3661,7 +4189,11 @@ function SettingsView({
             )}
           </div>
         </section>
+          </>
+        ) : null}
 
+        {settingsPane === "security" ? (
+          <>
         <section className="settings-panel">
           <SettingsPanelHeader icon={Shield} title="Hosts & SSL" detail={summary.ssl.store ?? summary.ssl.message ?? summary.paths.hostsFile} />
           <div className="settings-action-grid">
@@ -3694,7 +4226,11 @@ function SettingsView({
           </div>
           {hostsPreview ? <pre className="settings-hosts-preview">{hostsPreview}</pre> : null}
         </section>
+          </>
+        ) : null}
 
+        {settingsPane === "tools" ? (
+          <>
         <section className="settings-panel wide-settings-panel">
           <SettingsPanelHeader icon={FileText} title="Config Files" detail="Edit generated runtime ini files" />
           <div className="ini-edit-grid">
@@ -3730,7 +4266,11 @@ function SettingsView({
             </div>
           </div>
         </section>
+          </>
+        ) : null}
 
+        {settingsPane === "paths" ? (
+          <>
         <section className="settings-panel">
           <SettingsPanelHeader icon={HardDrive} title="Files" detail="Open or copy app paths" />
           <div className="settings-path-list dense">
@@ -3747,7 +4287,11 @@ function SettingsView({
             ))}
           </div>
         </section>
+          </>
+        ) : null}
 
+        {settingsPane === "security" ? (
+          <>
         <section className="settings-panel wide-settings-panel">
           <SettingsPanelHeader icon={Shield} title="Windows Defender" detail="Add exclusions to avoid scanning app data" />
           <div className="settings-action-grid">
@@ -3777,6 +4321,8 @@ function SettingsView({
             />
           </div>
         </section>
+          </>
+        ) : null}
       </div>
     </div>
   );

@@ -14,9 +14,7 @@ export function apiUrl(path: string): string {
   }
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const isLocalBrowser =
-    (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") &&
-    (window.location.port === "5173" || window.location.port === "47899");
+  const isLocalBrowser = window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost";
 
   if ((window.location.protocol === "http:" || window.location.protocol === "https:") && isLocalBrowser) {
     return normalizedPath;

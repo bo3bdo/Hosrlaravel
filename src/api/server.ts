@@ -34,6 +34,7 @@ import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../cor
 import { tryEnsureWindowsDefenderExclusion } from "../core/defender.js";
 import { getDashboardSummary } from "../core/summary.js";
 import { readSitePreviewImage } from "../core/sitePreview.js";
+import { checkSiteHealth } from "../core/siteHealth.js";
 import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
 import { clearLogs } from "../core/logging.js";
 import { getStartupStatus, startConfiguredServicesOnLaunch, updateStartupSettings } from "../core/startup.js";
@@ -246,6 +247,12 @@ const server = http.createServer(async (request, response) => {
         "Last-Modified": preview.updatedAt.toUTCString()
       });
       response.end(preview.body);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/health") {
+      const site = assertString(url.searchParams.get("site"), "site");
+      await sendJson(response, await checkSiteHealth(site));
       return;
     }
 
