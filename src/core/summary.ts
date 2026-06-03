@@ -1,9 +1,9 @@
 import { loadConfig } from "./config.js";
 import { readRecentLogs } from "./logging.js";
-import { getMysqlStatus } from "./mysql.js";
+import { getMysqlStatus, mysqlConfigPath } from "./mysql.js";
 import { getNginxStatus } from "./nginx.js";
 import { getPaths, mysqlDataForVersion, mysqlRootForVersion, redisDataForVersion, redisRootForVersion } from "./paths.js";
-import { getPhpFastCgiStatus } from "./php.js";
+import { getPhpFastCgiStatus, phpIniPath } from "./php.js";
 import { getPhpMyAdminStatus } from "./phpmyadmin.js";
 import { getRedisStatus } from "./redis.js";
 import { getRuntimeStatus } from "./runtimes.js";
@@ -40,7 +40,9 @@ function activeSummaryPaths(config: DashboardSummary["config"]): DashboardSummar
   return {
     ...paths,
     mysqlRoot: mysqlRootForVersion(config.mysql.version),
+    mysqlConfig: mysqlConfigPath(config.mysql.version),
     mysqlData: mysqlDataForVersion(config.mysql.version),
+    phpIni: phpIniPath(config.globalPhpVersion),
     redisRoot: redisRootForVersion(config.redis.version),
     redisData: redisDataForVersion(config.redis.version)
   };

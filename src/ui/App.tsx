@@ -30,9 +30,28 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
-import type { DashboardSummary, PhpConfig, PhpExtensionStatus, PhpSettingsStatus, RuntimeInstallJob, RuntimeInstallStatus, RuntimeKind, ServiceStatus, Site } from "./types.js";
+import type {
+  DashboardSummary,
+  LaravelAuthPreset,
+  LaravelDatabaseDriver,
+  LaravelInstallerStatus,
+  LaravelPackageManager,
+  LaravelStarterKit,
+  LaravelTestingFramework,
+  NewSitePreset,
+  PhpConfig,
+  PhpExtensionStatus,
+  PhpSettingsStatus,
+  RuntimeInstallJob,
+  RuntimeInstallStatus,
+  RuntimeKind,
+  ServiceStatus,
+  Site,
+  SiteCreationResult
+} from "./types.js";
 
 type Section = "sites" | "services" | "logs" | "settings";
 type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
@@ -87,6 +106,21 @@ async function openExternalUrl(url: string): Promise<void> {
   }
 
   window.open(url, "_blank", "noopener,noreferrer");
+}
+
+async function copyTextToClipboard(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = value;
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    document.execCommand("copy");
+    document.body.removeChild(fallback);
+  }
 }
 
 export default function App() {
@@ -279,7 +313,7 @@ export default function App() {
             {section === "services" ? (
               <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
             ) : null}
-            {section === "logs" ? <Logs summary={summary} /> : null}
+            {section === "logs" ? <Logs summary={summary} post={post} busy={busy} /> : null}
             {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} /> : null}
           </section>
         )}
@@ -1312,7 +1346,7 @@ function Services({
           detail={`${activeDatabaseLabel} · 127.0.0.1:${summary.config.mysql.port}`}
         />
         <div className="database-workbench">
-          <div className="database-card">
+          <div className="database-card database-create-card">
             <h2>Create Database</h2>
             <div className="service-inline-settings">
               <input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} />
@@ -1328,7 +1362,7 @@ function Services({
             {envText ? <pre className="snippet compact-snippet">{envText}</pre> : null}
           </div>
 
-          <div className="database-card">
+          <div className="database-card database-root-card">
             <h2>Root Password</h2>
             <div className="service-inline-settings">
               <input readOnly type={showRootPassword ? "text" : "password"} value={rootPassword} placeholder="Stored password" />
@@ -1350,7 +1384,7 @@ function Services({
             </div>
           </div>
 
-          <div className="database-card">
+          <div className="database-card database-admin-card">
             <h2>phpMyAdmin</h2>
             <ServiceStrip
               service={{
@@ -1598,6 +1632,7 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
   const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
   const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
   const [siteTab, setSiteTab] = useState<"general" | "information">("general");
+  const [newSiteOpen, setNewSiteOpen] = useState(false);
   const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
   const [entryPath, setEntryPath] = useState(selectedSite?.entryPath ?? ".");
   const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
@@ -1656,8 +1691,12 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
             <FolderOpen size={18} />
           </button>
         </div>
-        <button className="primary" disabled={busy || !folder.trim()} onClick={() => void post("/api/sites/park", { path: folder })}>
+        <button className="primary" disabled={busy} onClick={() => setNewSiteOpen((open) => !open)} title="Create new site">
           <FolderPlus size={18} />
+          <span>New Site</span>
+        </button>
+        <button disabled={busy || !folder.trim()} onClick={() => void post("/api/sites/park", { path: folder })}>
+          <FolderOpen size={18} />
           <span>Park Folder</span>
         </button>
         <button disabled={busy} onClick={() => void post("/api/hosts/sync", {})}>
@@ -1666,6 +1705,22 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
         </button>
       </div>
       <SslTrustPanel summary={summary} post={post} busy={busy} />
+      {newSiteOpen ? (
+        <div className="new-site-modal-backdrop" onMouseDown={(event) => event.currentTarget === event.target && setNewSiteOpen(false)}>
+          <NewSitePanel
+            summary={summary}
+            request={request}
+            busy={busy}
+            defaultParent={folder || summary.config.parkedFolders[0] || defaultSitesFolder(summary)}
+            onClose={() => setNewSiteOpen(false)}
+            onCreated={(site) => {
+              setSelectedDomain(site.domain);
+              setSiteTab("general");
+              setNewSiteOpen(false);
+            }}
+          />
+        </div>
+      ) : null}
       {selectedSite ? (
         <div className="sites-workbench">
           <aside className="sites-list-pane">
@@ -1777,28 +1832,334 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
   );
 }
 
+function NewSitePanel({
+  summary,
+  request,
+  busy,
+  defaultParent,
+  onCreated,
+  onClose
+}: {
+  summary: DashboardSummary;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  busy: boolean;
+  defaultParent: string;
+  onCreated: (site: Site) => void;
+  onClose: () => void;
+}) {
+  const activeDatabaseDriver: LaravelDatabaseDriver =
+    databaseEngineName(selectedMysqlRuntime(summary, summary.config.mysql.version)) === "MariaDB" ? "mariadb" : "mysql";
+  const [name, setName] = useState("");
+  const [parentPath, setParentPath] = useState(defaultParent);
+  const [preset, setPreset] = useState<NewSitePreset>("laravel");
+  const [starterKit, setStarterKit] = useState<LaravelStarterKit>("none");
+  const [auth, setAuth] = useState<LaravelAuthPreset>("default");
+  const [database, setDatabase] = useState<LaravelDatabaseDriver>(activeDatabaseDriver);
+  const [packageManager, setPackageManager] = useState<LaravelPackageManager>("none");
+  const [testing, setTesting] = useState<LaravelTestingFramework>("pest");
+  const [git, setGit] = useState(false);
+  const [boost, setBoost] = useState(false);
+  const [installerStatus, setInstallerStatus] = useState<LaravelInstallerStatus | null>(null);
+  const [installerBusy, setInstallerBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const working = busy || installerBusy || creating;
+  const canCreate = name.trim().length > 0 && parentPath.trim().length > 0;
+  const installerTone = !installerStatus
+    ? "amber"
+    : installerStatus.installed && !installerStatus.updateAvailable
+      ? "green"
+      : installerStatus.installed
+        ? "amber"
+        : "red";
+  const installerLabel = !installerStatus
+    ? "Checking"
+    : installerStatus.installed
+      ? installerStatus.updateAvailable
+        ? `Update ${installerStatus.latestVersion ?? ""}`.trim()
+        : `Installed ${installerStatus.version ?? ""}`.trim()
+      : "Missing";
+  const requirementsMessage = installerStatus?.message;
+
+  useEffect(() => {
+    if (!parentPath.trim()) {
+      setParentPath(defaultParent);
+    }
+  }, [defaultParent, parentPath]);
+
+  useEffect(() => {
+    void loadInstallerStatus();
+  }, []);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !working) {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, working]);
+
+  async function loadInstallerStatus() {
+    setInstallerBusy(true);
+    try {
+      const response = await fetch(apiUrl("/api/laravel-installer/status"));
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      setInstallerStatus((await response.json()) as LaravelInstallerStatus);
+      setPanelError(null);
+    } catch (error) {
+      setPanelError(`Installer status failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setInstallerBusy(false);
+    }
+  }
+
+  async function browseParentFolder() {
+    const payload = (await request("/api/dialog/folder", { initialPath: parentPath })) as { path?: string | null };
+    if (payload.path) {
+      setParentPath(payload.path);
+    }
+  }
+
+  async function installInstaller() {
+    setInstallerBusy(true);
+    try {
+      const payload = (await request("/api/laravel-installer/install", {})) as { status?: LaravelInstallerStatus };
+      if (payload.status) {
+        setInstallerStatus(payload.status);
+      } else {
+        await loadInstallerStatus();
+      }
+      setPanelError(null);
+    } catch (error) {
+      setPanelError(`Installer action failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setInstallerBusy(false);
+    }
+  }
+
+  async function createSite() {
+    setCreating(true);
+    try {
+      const payload = (await request("/api/sites/create", {
+        name,
+        parentPath,
+        preset,
+        starterKit,
+        auth,
+        database,
+        packageManager,
+        testing,
+        git,
+        boost
+      })) as { result?: SiteCreationResult };
+      if (payload.result?.site) {
+        onCreated(payload.result.site);
+      }
+      setPanelError(null);
+    } catch (error) {
+      setPanelError(`Create site failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="new-site-panel" role="dialog" aria-modal="true" aria-labelledby="new-site-title">
+      <div className="new-site-panel-header">
+        <div className="new-site-title">
+          <FolderPlus size={20} />
+          <div>
+            <strong id="new-site-title">Create New Site</strong>
+            <span>{parentPath}</span>
+          </div>
+        </div>
+        <div className="new-site-header-actions">
+          <Badge label={installerLabel} tone={installerTone} />
+          {!installerStatus?.installed || installerStatus.updateAvailable ? (
+            <button
+              className="primary"
+              disabled={working}
+              onClick={() => void installInstaller()}
+              title={installerStatus?.installed ? "Update Laravel Installer" : "Install Laravel Installer"}
+            >
+              {installerStatus?.installed ? <RotateCw size={18} /> : <Download size={18} />}
+              <span>{installerStatus?.installed ? "Update" : "Install"}</span>
+            </button>
+          ) : null}
+          <button disabled={working} onClick={() => void loadInstallerStatus()} title="Refresh installer status">
+            <RotateCw size={18} />
+          </button>
+          <button className="new-site-close" disabled={working} onClick={onClose} title="Close">
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="new-site-form">
+        <label>
+          <span>Name</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="my-app" autoFocus />
+        </label>
+        <label className="new-site-path-field">
+          <span>Location</span>
+          <div className="path-picker">
+            <input value={parentPath} onChange={(event) => setParentPath(event.target.value)} />
+            <button type="button" className="field-icon-button" disabled={working} onClick={() => void browseParentFolder()} title="Browse folder">
+              <FolderOpen size={18} />
+            </button>
+          </div>
+        </label>
+        <label>
+          <span>Type</span>
+          <div className="segmented new-site-segmented">
+            {(["laravel", "php", "static"] as NewSitePreset[]).map((item) => (
+              <button key={item} className={preset === item ? "active" : ""} onClick={() => setPreset(item)}>
+                {item === "laravel" ? "Laravel" : item === "php" ? "PHP" : "Static"}
+              </button>
+            ))}
+          </div>
+        </label>
+
+        {preset === "laravel" ? (
+          <>
+            <label>
+              <span>Starter</span>
+              <select value={starterKit} onChange={(event) => setStarterKit(event.target.value as LaravelStarterKit)}>
+                <option value="none">None</option>
+                <option value="react">React</option>
+                <option value="vue">Vue</option>
+                <option value="svelte">Svelte</option>
+                <option value="livewire">Livewire</option>
+              </select>
+            </label>
+            <label>
+              <span>Auth</span>
+              <select value={auth} onChange={(event) => setAuth(event.target.value as LaravelAuthPreset)}>
+                <option value="default">Default</option>
+                <option value="none">None</option>
+                <option value="workos">WorkOS</option>
+              </select>
+            </label>
+            <label>
+              <span>Database</span>
+              <select value={database} onChange={(event) => setDatabase(event.target.value as LaravelDatabaseDriver)}>
+                <option value="mysql">MySQL</option>
+                <option value="mariadb">MariaDB</option>
+                <option value="sqlite">SQLite</option>
+                <option value="pgsql">PostgreSQL</option>
+                <option value="sqlsrv">SQL Server</option>
+              </select>
+            </label>
+            <label>
+              <span>Testing</span>
+              <select value={testing} onChange={(event) => setTesting(event.target.value as LaravelTestingFramework)}>
+                <option value="pest">Pest</option>
+                <option value="phpunit">PHPUnit</option>
+              </select>
+            </label>
+            <label>
+              <span>Node</span>
+              <select value={packageManager} onChange={(event) => setPackageManager(event.target.value as LaravelPackageManager)}>
+                <option value="none">Skip</option>
+                <option value="npm">npm</option>
+                <option value="pnpm">pnpm</option>
+                <option value="bun">Bun</option>
+                <option value="yarn">Yarn</option>
+              </select>
+            </label>
+            <div className="new-site-switches">
+              <label className="compact-toggle">
+                <input type="checkbox" checked={git} onChange={(event) => setGit(event.target.checked)} />
+                <span>Git</span>
+              </label>
+              <label className="compact-toggle">
+                <input type="checkbox" checked={boost} onChange={(event) => setBoost(event.target.checked)} />
+                <span>Boost</span>
+              </label>
+            </div>
+          </>
+        ) : null}
+      </div>
+
+      {panelError || (requirementsMessage && preset === "laravel") ? (
+        <div className={panelError ? "new-site-message error" : "new-site-message"}>{panelError ?? requirementsMessage}</div>
+      ) : null}
+
+      <div className="new-site-actions">
+        <button className="primary" disabled={working || !canCreate} onClick={() => void createSite()} title="Create site">
+          {creating ? <LoaderCircle className="spin" size={18} /> : <PackageCheck size={18} />}
+          <span>Create</span>
+        </button>
+        <button disabled={working} onClick={onClose} title="Cancel">
+          <CircleStop size={18} />
+          <span>Cancel</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SitePreviewImage({ site }: { site: Site }) {
   const [refreshToken, setRefreshToken] = useState(0);
   const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const previewUrl = apiUrl(
     `/api/sites/preview?site=${encodeURIComponent(site.domain)}${refreshToken > 0 ? `&refresh=1&t=${refreshToken}` : ""}`
   );
 
   useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+
     setState("loading");
-  }, [site.domain, refreshToken]);
+    setImageUrl(null);
+
+    async function loadPreview() {
+      try {
+        const response = await fetch(previewUrl, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(await responseErrorMessage(response));
+        }
+
+        const blob = await response.blob();
+        if (!blob.size) {
+          throw new Error("Preview image was empty.");
+        }
+
+        objectUrl = URL.createObjectURL(blob);
+        setImageUrl(objectUrl);
+      } catch {
+        if (!controller.signal.aborted) {
+          setState("error");
+        }
+      }
+    }
+
+    void loadPreview();
+
+    return () => {
+      controller.abort();
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [previewUrl]);
 
   return (
     <div className="site-preview-window">
-      {state !== "error" ? (
-        <img src={previewUrl} alt={`${site.domain} preview`} onLoad={() => setState("loaded")} onError={() => setState("error")} />
-      ) : (
+      {state !== "error" && imageUrl ? (
+        <img src={imageUrl} alt={`${site.domain} preview`} onLoad={() => setState("loaded")} onError={() => setState("error")} />
+      ) : null}
+      {state === "error" ? (
         <div className="site-preview-fallback">
           <Globe size={28} />
           <strong>{site.domain}</strong>
           <span>Preview unavailable</span>
         </div>
-      )}
+      ) : null}
       {state === "loading" ? (
         <div className="site-preview-loading">
           <LoaderCircle className="spin" size={18} />
@@ -2683,9 +3044,52 @@ function Redis({
   );
 }
 
-function Logs({ summary }: { summary: DashboardSummary }) {
+function Logs({ summary, post, busy }: ViewProps) {
+  const [copied, setCopied] = useState(false);
+  const logText = summary.logs.join("\n");
+  const displayText = logText || "No log entries yet.";
+  const modelText = [
+    "Laraboxs diagnostic log",
+    `Generated: ${new Date().toISOString()}`,
+    "",
+    "```text",
+    displayText,
+    "```"
+  ].join("\n");
+
+  async function copyLogs() {
+    await copyTextToClipboard(modelText);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+
+  async function clearAllLogs() {
+    if (!window.confirm("Clear all Laraboxs logs?")) {
+      return;
+    }
+    await post("/api/logs/clear");
+  }
+
   return (
-    <pre className="logs">{summary.logs.length ? summary.logs.join("\n") : "No log entries yet."}</pre>
+    <div className="logs-view">
+      <div className="logs-toolbar">
+        <div className="logs-meta">
+          <strong>Runtime Logs</strong>
+          <span>{summary.logs.length ? `${summary.logs.length} lines` : "empty"}</span>
+        </div>
+        <div className="logs-actions">
+          <button disabled={busy} onClick={() => void copyLogs()} title="Copy logs for any model">
+            <Clipboard size={18} />
+            <span>{copied ? "Copied" : "Copy for Model"}</span>
+          </button>
+          <button className="danger-log-button" disabled={busy || summary.logs.length === 0} onClick={() => void clearAllLogs()} title="Clear all logs">
+            <Trash2 size={18} />
+            <span>Clear Logs</span>
+          </button>
+        </div>
+      </div>
+      <pre className="logs">{displayText}</pre>
+    </div>
   );
 }
 
@@ -2703,6 +3107,8 @@ function SettingsView({
   const [databaseChoice, setDatabaseChoice] = useState(summary.config.mysql.version);
   const [copiedPath, setCopiedPath] = useState("");
   const [hostsPreview, setHostsPreview] = useState("");
+  const [installerStatus, setInstallerStatus] = useState<LaravelInstallerStatus | null>(null);
+  const [installerBusy, setInstallerBusy] = useState(false);
 
   const normalizedTld = normalizeLocalTld(tld);
   const tldValid = isValidLocalTld(normalizedTld);
@@ -2713,6 +3119,16 @@ function SettingsView({
   const parkedFoldersKey = summary.config.parkedFolders.join("|");
   const phpVersionsKey = summary.runtimes.php.map((runtime) => runtime.version).join("|");
   const databaseVersionsKey = summary.runtimes.mysql.map((runtime) => runtime.version).join("|");
+  const installerWorking = busy || installerBusy;
+  const installerActionLabel = !installerStatus
+    ? "Checking"
+    : installerStatus.installed
+      ? installerStatus.updateAvailable
+        ? "Update"
+        : "Installed"
+      : "Install";
+  const installerBadge = laravelInstallerBadge(installerStatus);
+  const installerDetail = laravelInstallerDetail(installerStatus);
   const pathRows = [
     { label: "Config", value: summary.paths.configFile, icon: FileText, reveal: true },
     { label: "Hosts", value: summary.paths.hostsFile, icon: Network, reveal: true },
@@ -2740,6 +3156,10 @@ function SettingsView({
     setDatabaseChoice((current) => (summary.runtimes.mysql.some((runtime) => runtime.version === current) ? current : summary.config.mysql.version));
   }, [databaseVersionsKey, summary.config.mysql.version, summary.runtimes.mysql]);
 
+  useEffect(() => {
+    void loadLaravelInstallerStatus();
+  }, []);
+
   async function saveGeneralSettings() {
     await request("/api/settings", { tld: normalizedTld });
     setHostsPreview("");
@@ -2753,18 +3173,7 @@ function SettingsView({
   }
 
   async function copyPath(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      const fallback = document.createElement("textarea");
-      fallback.value = value;
-      fallback.style.position = "fixed";
-      fallback.style.opacity = "0";
-      document.body.appendChild(fallback);
-      fallback.select();
-      document.execCommand("copy");
-      document.body.removeChild(fallback);
-    }
+    await copyTextToClipboard(value);
     setCopiedPath(value);
     window.setTimeout(() => setCopiedPath((current) => (current === value ? "" : current)), 1200);
   }
@@ -2772,6 +3181,46 @@ function SettingsView({
   async function previewHosts() {
     const payload = (await request("/api/hosts/sync", { dryRun: true })) as { hosts?: string };
     setHostsPreview(payload.hosts ?? "");
+  }
+
+  async function loadLaravelInstallerStatus() {
+    setInstallerBusy(true);
+    try {
+      const response = await fetch(apiUrl("/api/laravel-installer/status"));
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      setInstallerStatus((await response.json()) as LaravelInstallerStatus);
+    } finally {
+      setInstallerBusy(false);
+    }
+  }
+
+  async function installLaravelInstaller() {
+    setInstallerBusy(true);
+    try {
+      const payload = (await request("/api/laravel-installer/install", {})) as { status?: LaravelInstallerStatus };
+      setInstallerStatus(payload.status ?? null);
+      if (!payload.status) {
+        await loadLaravelInstallerStatus();
+      }
+    } finally {
+      setInstallerBusy(false);
+    }
+  }
+
+  async function removeLaravelInstaller() {
+    if (!window.confirm("Remove Laravel Installer?")) {
+      return;
+    }
+    setInstallerBusy(true);
+    try {
+      const payload = (await request("/api/laravel-installer/uninstall", {})) as { status?: LaravelInstallerStatus };
+      setInstallerStatus(payload.status ?? null);
+      if (!payload.status) {
+        await loadLaravelInstallerStatus();
+      }
+    } finally {
+      setInstallerBusy(false);
+    }
   }
 
   return (
@@ -2834,6 +3283,48 @@ function SettingsView({
             </button>
           </div>
           {!tldValid && tld.trim() ? <span className="settings-warning">Use letters, numbers, or hyphens only.</span> : null}
+        </section>
+
+        <section className="settings-panel wide-settings-panel">
+          <SettingsPanelHeader icon={PackageCheck} title="Laravel Installer" detail="composer global require laravel/installer" />
+          <div className="installer-tool-card">
+            <PackageCheck size={18} />
+            <div>
+              <strong>{installerDetail.title}</strong>
+              <span>{installerDetail.subtitle}</span>
+            </div>
+            <Badge label={installerBadge.label} tone={installerBadge.tone} />
+          </div>
+          <div className="settings-actions">
+            <button
+              className={!installerStatus?.installed || installerStatus.updateAvailable ? "primary" : ""}
+              disabled={installerWorking || !installerStatus || (installerStatus.installed && !installerStatus.updateAvailable)}
+              onClick={() => void installLaravelInstaller()}
+              title={installerStatus?.installed ? "Update Laravel Installer" : "Install Laravel Installer"}
+            >
+              {installerStatus?.installed ? <RotateCw size={16} /> : <Download size={16} />}
+              <span>{installerActionLabel}</span>
+            </button>
+            <button disabled={installerWorking} onClick={() => void loadLaravelInstallerStatus()} title="Refresh Laravel Installer status">
+              <RotateCw size={16} />
+              <span>Refresh</span>
+            </button>
+            <button className="danger-log-button" disabled={installerWorking || !installerStatus?.installed} onClick={() => void removeLaravelInstaller()} title="Remove Laravel Installer">
+              <Trash2 size={16} />
+              <span>Remove</span>
+            </button>
+          </div>
+          <dl className="details compact-details installer-details">
+            <dt>Version</dt>
+            <dd>{installerStatus?.version ?? "Not installed"}</dd>
+            <dt>Latest</dt>
+            <dd>{installerStatus?.latestVersion ?? "Unknown"}</dd>
+            <dt>Composer Home</dt>
+            <dd>{installerStatus?.composerHome ?? "Checking..."}</dd>
+            <dt>Binary</dt>
+            <dd>{installerStatus?.binary ?? "Not installed"}</dd>
+          </dl>
+          {installerStatus?.message ? <span className="settings-warning">{installerStatus.message}</span> : null}
         </section>
 
         <section className="settings-panel">
@@ -2902,6 +3393,42 @@ function SettingsView({
           {hostsPreview ? <pre className="settings-hosts-preview">{hostsPreview}</pre> : null}
         </section>
 
+        <section className="settings-panel wide-settings-panel">
+          <SettingsPanelHeader icon={FileText} title="Config Files" detail="Edit generated runtime ini files" />
+          <div className="ini-edit-grid">
+            <div className="ini-edit-card">
+              <SquareTerminal size={18} />
+              <div>
+                <strong>php.ini</strong>
+                <span>{summary.paths.phpIni}</span>
+              </div>
+              <button className="primary" disabled={busy} onClick={() => void post("/api/php/ini/open", { version: summary.config.globalPhpVersion })} title="Edit php.ini">
+                <FileText size={16} />
+                <span>Edit</span>
+              </button>
+              <button disabled={busy} onClick={() => void post("/api/php/ini/open", { version: summary.config.globalPhpVersion, reveal: true })} title="Show php.ini">
+                <FolderOpen size={16} />
+                <span>Reveal</span>
+              </button>
+            </div>
+            <div className="ini-edit-card">
+              <Database size={18} />
+              <div>
+                <strong>my.ini</strong>
+                <span>{summary.paths.mysqlConfig}</span>
+              </div>
+              <button className="primary" disabled={busy} onClick={() => void post("/api/mysql/ini", {})} title="Edit my.ini">
+                <FileText size={16} />
+                <span>Edit</span>
+              </button>
+              <button disabled={busy} onClick={() => void post("/api/mysql/ini", { reveal: true })} title="Show my.ini">
+                <FolderOpen size={16} />
+                <span>Reveal</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
         <section className="settings-panel">
           <SettingsPanelHeader icon={HardDrive} title="Files" detail="Open or copy app paths" />
           <div className="settings-path-list dense">
@@ -2943,6 +3470,38 @@ function SettingsStat({
       </div>
     </div>
   );
+}
+
+function laravelInstallerBadge(status: LaravelInstallerStatus | null): { label: string; tone: "green" | "amber" | "red" } {
+  if (!status) {
+    return { label: "checking", tone: "amber" };
+  }
+  if (!status.installed) {
+    return { label: "missing", tone: "red" };
+  }
+  if (status.updateAvailable) {
+    return { label: "update", tone: "amber" };
+  }
+  return { label: "installed", tone: "green" };
+}
+
+function laravelInstallerDetail(status: LaravelInstallerStatus | null): { title: string; subtitle: string } {
+  if (!status) {
+    return { title: "Checking Laravel Installer", subtitle: "Reading Composer global status" };
+  }
+  if (!status.phpInstalled) {
+    return { title: "PHP runtime will be installed", subtitle: "Needed before Composer can run the installer" };
+  }
+  if (!status.composerInstalled) {
+    return { title: "Composer will be installed", subtitle: "Install uses composer global require laravel/installer" };
+  }
+  if (!status.installed) {
+    return { title: "Laravel Installer is not installed", subtitle: "Install uses composer global require laravel/installer" };
+  }
+  if (status.updateAvailable) {
+    return { title: `Update available ${status.latestVersion ?? ""}`.trim(), subtitle: `Installed ${status.version ?? "unknown"}` };
+  }
+  return { title: `Installed ${status.version ?? "ready"}`, subtitle: status.binary ?? status.binDir };
 }
 
 function SettingsPanelHeader({ icon: Icon, title, detail }: { icon: typeof Globe; title: string; detail: string }) {

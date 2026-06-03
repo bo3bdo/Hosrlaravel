@@ -20,6 +20,10 @@ export function mysqlBinaryPath(binary: "mysqld" | "mysql" | "mysqladmin" = "mys
   return existsSync(bundled) ? bundled : binary;
 }
 
+export function mysqlConfigPath(version: string): string {
+  return mysqlPathsForVersion(version).config;
+}
+
 export async function ensureMysqlConfigured(): Promise<string> {
   const config = await loadConfig();
   const paths = mysqlPathsForVersion(config.mysql.version);

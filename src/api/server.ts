@@ -3,14 +3,16 @@ import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { updateConfig } from "../core/config.js";
+import { loadConfig, updateConfig } from "../core/config.js";
 import { addParkedFolder, isolateSite, resetSiteEntryPath, setConfiguredPhpVersions, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
 import { syncHostsFile } from "../core/hosts.js";
 import {
   findAvailableMysqlPort,
   getMysqlRootPassword,
+  ensureMysqlConfigured,
   initializeMysqlDataDir,
   laravelEnv,
+  mysqlConfigPath,
   openMysqlShell,
   runCreateDatabase,
   runMysql,
@@ -20,16 +22,18 @@ import {
   setMysqlVersion
 } from "../core/mysql.js";
 import { getNginxStatus, runNginx, updateNginxSettings, writeNginxConfigs } from "../core/nginx.js";
-import { getPhpFastCgiStatus, getPhpSettings, runPhpFastCgi, updatePhpSettings } from "../core/php.js";
+import { ensurePhpIni, getPhpFastCgiStatus, getPhpSettings, runPhpFastCgi, updatePhpSettings } from "../core/php.js";
 import { getPhpMyAdminStatus, installPhpMyAdmin, writePhpMyAdminConfig } from "../core/phpmyadmin.js";
-import { findAvailableRedisPort, redisCliCommand, runRedis, setRedisPort } from "../core/redis.js";
+import { findAvailableRedisPort, openRedisCli, runRedis, setRedisPort } from "../core/redis.js";
 import { ensureDeveloperCommandPath, uninstallRuntime } from "../core/runtimes.js";
 import { getRuntimeInstallJob, listRuntimeInstallJobs, startRuntimeInstallJob } from "./runtimeJobs.js";
 import { selectFolder } from "./dialogs.js";
 import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
 import { getDashboardSummary } from "../core/summary.js";
 import { readSitePreviewImage } from "../core/sitePreview.js";
-import type { RuntimeKind, ServiceAction } from "../core/types.js";
+import { createNewSite, getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
+import { clearLogs } from "../core/logging.js";
+import type { NewSiteRequest, RuntimeKind, ServiceAction } from "../core/types.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.LARABOXS_API_PORT ?? 47899);
@@ -69,6 +73,12 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/summary") {
       await sendJson(response, await getDashboardSummary());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/logs/clear") {
+      const cleared = await clearLogs();
+      await sendJson(response, { ok: true, cleared, summary: await getDashboardSummary() });
       return;
     }
 
@@ -112,6 +122,33 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/sites/create") {
+      const body = await readJson(request);
+      const result = await createNewSite(assertNewSiteRequest(body));
+      await writeNginxConfigs();
+      await syncHostsFile();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, result, summary: await getDashboardSummary() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/laravel-installer/status") {
+      await sendJson(response, await getLaravelInstallerStatus({ checkLatest: url.searchParams.get("latest") !== "0" }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/laravel-installer/install") {
+      await sendJson(response, { ok: true, status: await installOrUpdateLaravelInstaller() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/laravel-installer/uninstall") {
+      await sendJson(response, { ok: true, status: await uninstallLaravelInstaller() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/open-url") {
       const body = await readJson(request);
       openExternalUrl(assertHttpUrl(body.url));
@@ -121,8 +158,8 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/open-path") {
       const body = await readJson(request);
-      openLocalPath(assertString(body.path, "path"), body.reveal === true);
-      await sendJson(response, { ok: true });
+      const openedPath = await openLocalPath(assertString(body.path, "path"), body.reveal === true);
+      await sendJson(response, { ok: true, path: openedPath });
       return;
     }
 
@@ -219,6 +256,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/php/ini/open") {
+      const body = await readJson(request);
+      const config = await loadConfig();
+      const version = typeof body.version === "string" ? body.version : config.globalPhpVersion;
+      const iniPath = await ensurePhpIni(version);
+      await openLocalPath(iniPath, body.reveal === true);
+      await sendJson(response, { ok: true, path: iniPath });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/php/isolate") {
       const body = await readJson(request);
       await isolateSite(assertString(body.site, "site"), assertString(body.version, "version"));
@@ -288,6 +335,16 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      if (actionName === "ini") {
+        const body = await readJson(request);
+        const config = await loadConfig();
+        await ensureMysqlConfigured();
+        const iniPath = mysqlConfigPath(config.mysql.version);
+        await openLocalPath(iniPath, body.reveal === true);
+        await sendJson(response, { ok: true, path: iniPath });
+        return;
+      }
+
       if (actionName === "env") {
         const body = await readJson(request);
         await sendJson(response, { env: await laravelEnv(assertString(body.name, "name")) });
@@ -337,8 +394,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (actionName === "shell") {
-        const command = await redisCliCommand();
-        spawn(command.command, command.args, { stdio: "inherit", shell: false, windowsHide: true });
+        await openRedisCli();
         await sendJson(response, { ok: true });
         return;
       }
@@ -588,22 +644,33 @@ function openExternalUrl(url: string): void {
   child.unref();
 }
 
-function openLocalPath(target: string, reveal: boolean): void {
+async function openLocalPath(target: string, reveal: boolean): Promise<string> {
+  const resolved = path.resolve(target);
+  const targetStat = await stat(resolved).catch(() => undefined);
+  const fallbackFolder = targetStat?.isDirectory() ? resolved : path.dirname(resolved);
+  const folderStat = await stat(fallbackFolder).catch(() => undefined);
+  const openTarget = targetStat ? resolved : folderStat?.isDirectory() ? fallbackFolder : resolved;
+
   const command =
     process.platform === "win32"
-      ? { file: "explorer.exe", args: reveal ? [`/select,${target}`] : [target] }
+      ? {
+          file: "explorer.exe",
+          args: reveal && targetStat && !targetStat.isDirectory() ? ["/select,", resolved] : [openTarget],
+          windowsHide: false
+        }
       : process.platform === "darwin"
-        ? { file: "open", args: reveal ? ["-R", target] : [target] }
-        : { file: "xdg-open", args: [target] };
+        ? { file: "open", args: reveal && targetStat ? ["-R", resolved] : [openTarget], windowsHide: true }
+        : { file: "xdg-open", args: [reveal && targetStat && !targetStat.isDirectory() ? fallbackFolder : openTarget], windowsHide: true };
 
   const child = spawn(command.file, command.args, {
     detached: true,
     stdio: "ignore",
     shell: false,
-    windowsHide: true
+    windowsHide: command.windowsHide
   });
   child.once("error", () => undefined);
   child.unref();
+  return openTarget;
 }
 
 function assertGeneralSettings(value: unknown) {
@@ -653,6 +720,43 @@ function assertNginxSettings(value: unknown) {
     httpsPort: requiredPort(input.httpsPort, "HTTPS port"),
     fastCgiHost: assertString(input.fastCgiHost, "FastCGI host")
   };
+}
+
+function assertNewSiteRequest(value: unknown): NewSiteRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Site options are required.");
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    name: assertString(input.name, "name"),
+    parentPath: optionalString(input.parentPath),
+    preset: newSitePreset(input.preset),
+    starterKit: optionalEnum(input.starterKit, ["none", "react", "vue", "svelte", "livewire"], "starter kit"),
+    auth: optionalEnum(input.auth, ["default", "none", "workos"], "authentication"),
+    database: optionalEnum(input.database, ["sqlite", "mysql", "mariadb", "pgsql", "sqlsrv"], "database"),
+    packageManager: optionalEnum(input.packageManager, ["none", "npm", "pnpm", "bun", "yarn"], "package manager"),
+    testing: optionalEnum(input.testing, ["pest", "phpunit"], "testing framework"),
+    git: input.git === true,
+    boost: input.boost === true
+  };
+}
+
+function newSitePreset(value: unknown): NewSiteRequest["preset"] {
+  if (value === "laravel" || value === "php" || value === "static") {
+    return value;
+  }
+  throw new Error("Site preset must be laravel, php, or static.");
+}
+
+function optionalEnum<T extends string>(value: unknown, allowed: readonly T[], label: string): T | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) {
+    return value as T;
+  }
+  throw new Error(`Unsupported ${label}: ${String(value)}`);
 }
 
 function optionalString(value: unknown): string | undefined {

@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildRedisCommand, generateRedisConfig, redisBinaryPath, setRedisPort } from "../src/core/redis.js";
+import { buildRedisCommand, generateRedisConfig, redisBinaryPath, redisCliCommand, redisCliLauncherCommand, setRedisPort } from "../src/core/redis.js";
 
 describe("redis command logic", () => {
   beforeEach(async () => {
@@ -25,5 +25,18 @@ describe("redis command logic", () => {
     expect(command.command).toBe(redisBinaryPath("redis-server", "8.8"));
     expect(command.args[0]).toBe("redis.conf");
     expect(command.cwd).toContain(path.join("services", "redis", "8.8"));
+  });
+
+  it("opens redis-cli through a visible launcher on Windows", async () => {
+    await setRedisPort(46379);
+    const command = await redisCliCommand();
+    const launcher = redisCliLauncherCommand(command);
+
+    if (process.platform === "win32") {
+      expect(launcher.command).toBe("cmd.exe");
+      expect(launcher.args).toEqual(["/d", "/c", "start", "laraboxs Redis CLI", command.command, ...command.args]);
+    } else {
+      expect(launcher).toEqual(command);
+    }
   });
 });

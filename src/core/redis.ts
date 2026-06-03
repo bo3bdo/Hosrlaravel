@@ -176,6 +176,41 @@ export async function redisCliCommand(): Promise<CommandSpec> {
   };
 }
 
+export async function openRedisCli(): Promise<void> {
+  const command = await redisCliCommand();
+  if (!existsSync(command.command)) {
+    throw new Error("Redis CLI binary not found. Install Redis from Setup or the Redis page.");
+  }
+
+  const launcher = redisCliLauncherCommand(command);
+  const child = spawn(launcher.command, launcher.args, {
+    cwd: launcher.cwd,
+    detached: true,
+    env: { ...process.env, ...(launcher.env ?? {}) },
+    stdio: "ignore",
+    shell: false,
+    windowsHide: false
+  });
+
+  child.once("error", (error) => {
+    void appendLog("redis", `interactive CLI failed: ${error.message}`);
+  });
+  child.unref();
+  await appendLog("redis", "interactive CLI opened");
+}
+
+export function redisCliLauncherCommand(command: CommandSpec): CommandSpec {
+  if (process.platform !== "win32") {
+    return command;
+  }
+
+  return {
+    command: "cmd.exe",
+    args: ["/d", "/c", "start", "laraboxs Redis CLI", command.command, ...command.args],
+    env: command.env
+  };
+}
+
 function redisPathsForVersion(version: string): { root: string; data: string; config: string } {
   const root = redisRootForVersion(version);
   return {

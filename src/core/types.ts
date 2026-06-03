@@ -57,6 +57,48 @@ export interface Site {
   framework: Framework;
 }
 
+export type NewSitePreset = "laravel" | "php" | "static";
+export type LaravelStarterKit = "none" | "react" | "vue" | "svelte" | "livewire";
+export type LaravelAuthPreset = "default" | "none" | "workos";
+export type LaravelDatabaseDriver = "sqlite" | "mysql" | "mariadb" | "pgsql" | "sqlsrv";
+export type LaravelPackageManager = "none" | "npm" | "pnpm" | "bun" | "yarn";
+export type LaravelTestingFramework = "pest" | "phpunit";
+
+export interface NewSiteRequest {
+  name: string;
+  parentPath?: string;
+  preset: NewSitePreset;
+  starterKit?: LaravelStarterKit;
+  auth?: LaravelAuthPreset;
+  database?: LaravelDatabaseDriver;
+  packageManager?: LaravelPackageManager;
+  testing?: LaravelTestingFramework;
+  git?: boolean;
+  boost?: boolean;
+}
+
+export interface LaravelInstallerStatus {
+  installed: boolean;
+  version?: string;
+  latestVersion?: string;
+  updateAvailable?: boolean;
+  binary?: string;
+  binDir: string;
+  composerHome: string;
+  composerInstalled: boolean;
+  phpInstalled: boolean;
+  message?: string;
+}
+
+export interface SiteCreationResult {
+  projectPath: string;
+  name: string;
+  preset: NewSitePreset;
+  site: Site;
+  command?: string;
+  output?: string;
+}
+
 export interface ServiceStatus {
   name: string;
   state: ServiceState;
@@ -167,7 +209,10 @@ export interface LaraboxsPaths {
 
 export interface DashboardSummary {
   config: LaraboxsConfig;
-  paths: LaraboxsPaths;
+  paths: LaraboxsPaths & {
+    mysqlConfig: string;
+    phpIni: string;
+  };
   sites: Site[];
   services: {
     nginx: ServiceStatus;

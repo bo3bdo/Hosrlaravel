@@ -1,8 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { appendLog, readRecentLogs } from "../src/core/logging.js";
+import { appendLog, clearLogs, readRecentLogs } from "../src/core/logging.js";
 import { getPaths } from "../src/core/paths.js";
 
 describe("log aggregation", () => {
@@ -20,5 +20,17 @@ describe("log aggregation", () => {
     expect(logs.some((line) => line.includes("[mysql] start requested"))).toBe(true);
     expect(logs).toContain("[mysql] mysqld error line");
     expect(logs).toContain("[nginx] nginx error line");
+  });
+
+  it("clears log files without removing non-log files", async () => {
+    await appendLog("mysql", "start requested");
+    await writeFile(path.join(getPaths().logs, "redis.log"), "redis line\n", "utf8");
+    await writeFile(path.join(getPaths().logs, "mysql-startup-init.sql"), "keep me\n", "utf8");
+
+    const cleared = await clearLogs();
+
+    expect(cleared).toEqual(["laraboxs.log", "redis.log"]);
+    expect(await readRecentLogs()).toEqual([]);
+    expect(await readFile(path.join(getPaths().logs, "mysql-startup-init.sql"), "utf8")).toBe("keep me\n");
   });
 });

@@ -1,6 +1,10 @@
 !macro NSIS_HOOK_PREINSTALL
   DetailPrint "Stopping running laraboxs processes before updating files..."
-  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = ''SilentlyContinue''; $$installDir = ''$INSTDIR''; $$localInstall = Join-Path $$env:LOCALAPPDATA ''laraboxs''; $$ownedRoots = @($$installDir, $$localInstall) | Where-Object { $$_ }; taskkill.exe /F /T /IM laraboxs.exe | Out-Null; $$port = 47899; Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $$port -State Listen | ForEach-Object { $$process = Get-CimInstance Win32_Process -Filter \"ProcessId = $$($$_.OwningProcess)\"; $$line = (($$process.ExecutablePath, $$process.CommandLine) -join '' ''); if ($$line -match ''laraboxs'') { Stop-Process -Id $$_.OwningProcess -Force } }; Get-CimInstance Win32_Process | ForEach-Object { $$path = $$_.ExecutablePath; $$commandLine = $$_.CommandLine; foreach ($$root in $$ownedRoots) { if (($$path -and $$path.StartsWith($$root, [StringComparison]::OrdinalIgnoreCase)) -or ($$commandLine -and $$commandLine.Contains($$root))) { Stop-Process -Id $$_.ProcessId -Force } } }; Start-Sleep -Milliseconds 1200"'
+  nsExec::ExecToLog 'taskkill.exe /F /T /IM laraboxs.exe'
+  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 47899 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $$_.OwningProcess -Force -ErrorAction SilentlyContinue }; $$localNode = Join-Path $$env:LOCALAPPDATA ''laraboxs\node.exe''; Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -ieq $$localNode } | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800"'
+  RMDir /r "$INSTDIR\app"
+  RMDir /r "$INSTDIR\dist"
+  RMDir /r "$INSTDIR\dist-ui"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

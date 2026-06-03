@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { buildLaravelNewArgs, createNewSite } from "../src/core/laravelInstaller.js";
 import { addParkedFolder, discoverSites, isolateSite, setGlobalPhpVersion, setSiteEntryPath } from "../src/core/sites.js";
 
 describe("site discovery", () => {
@@ -51,5 +52,43 @@ describe("site discovery", () => {
 
     expect(site?.entryPath).toBe("web");
     expect(site?.documentRoot.endsWith(path.join("plain-php", "web"))).toBe(true);
+  });
+
+  it("creates a plain PHP site inside a parked folder", async () => {
+    const result = await createNewSite({ name: "Hello PHP", preset: "php", parentPath: parked });
+    const sites = await discoverSites();
+    const site = sites.find((candidate) => candidate.domain === "hello-php.test");
+
+    expect(result.site.domain).toBe("hello-php.test");
+    expect(site?.framework).toBe("PHP");
+    expect(site?.documentRoot.endsWith(path.join("hello-php"))).toBe(true);
+  });
+
+  it("builds Laravel installer arguments from creation options", () => {
+    expect(
+      buildLaravelNewArgs({
+        name: "My App",
+        preset: "laravel",
+        starterKit: "react",
+        auth: "none",
+        database: "mariadb",
+        packageManager: "npm",
+        testing: "phpunit",
+        git: true,
+        boost: false
+      })
+    ).toEqual([
+      "new",
+      "my-app",
+      "--no-interaction",
+      "--no-ansi",
+      "--database=mariadb",
+      "--react",
+      "--no-authentication",
+      "--phpunit",
+      "--npm",
+      "--no-boost",
+      "--git"
+    ]);
   });
 });

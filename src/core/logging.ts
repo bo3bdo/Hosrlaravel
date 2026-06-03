@@ -1,4 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ensureBaseDirs, getPaths } from "./paths.js";
 
@@ -32,6 +32,16 @@ export async function readRecentLogs(limit = 80): Promise<string[]> {
   );
 
   return groups.flat();
+}
+
+export async function clearLogs(): Promise<string[]> {
+  await ensureBaseDirs();
+  const logsRoot = getPaths().logs;
+  const entries = await readdir(logsRoot, { withFileTypes: true });
+  const logFiles = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".log")).map((entry) => entry.name);
+
+  await Promise.all(logFiles.map((file) => writeFile(path.join(logsRoot, file), "", "utf8")));
+  return logFiles.sort();
 }
 
 async function readTail(filePath: string, limit: number): Promise<string[]> {

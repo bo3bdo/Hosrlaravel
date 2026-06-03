@@ -83,6 +83,35 @@ export interface Site {
   framework: Framework;
 }
 
+export type NewSitePreset = "laravel" | "php" | "static";
+export type LaravelStarterKit = "none" | "react" | "vue" | "svelte" | "livewire";
+export type LaravelAuthPreset = "default" | "none" | "workos";
+export type LaravelDatabaseDriver = "sqlite" | "mysql" | "mariadb" | "pgsql" | "sqlsrv";
+export type LaravelPackageManager = "none" | "npm" | "pnpm" | "bun" | "yarn";
+export type LaravelTestingFramework = "pest" | "phpunit";
+
+export interface LaravelInstallerStatus {
+  installed: boolean;
+  version?: string;
+  latestVersion?: string;
+  updateAvailable?: boolean;
+  binary?: string;
+  binDir: string;
+  composerHome: string;
+  composerInstalled: boolean;
+  phpInstalled: boolean;
+  message?: string;
+}
+
+export interface SiteCreationResult {
+  projectPath: string;
+  name: string;
+  preset: NewSitePreset;
+  site: Site;
+  command?: string;
+  output?: string;
+}
+
 export interface ServiceStatus {
   name: string;
   state: ServiceState;
@@ -135,9 +164,13 @@ export interface DashboardSummary {
     nginxRoot: string;
     nginxConfig: string;
     nginxSites: string;
+    mysqlConfig: string;
     mysqlData: string;
+    phpIni: string;
+    phpRoot: string;
     redisRoot: string;
     redisData: string;
+    certs: string;
     hostsFile: string;
   };
   sites: Site[];
