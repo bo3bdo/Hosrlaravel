@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import path from "node:path";
 import selfsigned from "selfsigned";
 import { updateDotEnvFile } from "./envFile.js";
@@ -30,7 +31,7 @@ export async function ensureSiteCertificate(domain: string): Promise<void> {
   const paths = getPaths();
   const certPath = path.join(paths.certs, `${domain}.crt`);
   const keyPath = path.join(paths.certs, `${domain}.key`);
-  if (existsSync(certPath) && existsSync(keyPath)) {
+  if (existsSync(certPath) && existsSync(keyPath) && (await siteCertificateMatchesLocalCa(certPath))) {
     return;
   }
 
@@ -75,8 +76,21 @@ export async function getLocalCaStatus(): Promise<SslTrustStatus> {
     };
   }
 
+  const machineStoreTrusted = await isLocalCaTrustedInStore("LocalMachine");
+  if (machineStoreTrusted) {
+    return {
+      certPath,
+      keyPath,
+      exists: true,
+      trusted: true,
+      platform: process.platform,
+      store: "LocalMachine\\Root",
+      message: "Local CA is trusted."
+    };
+  }
+
   const userStoreTrusted = await isLocalCaTrustedInStore("CurrentUser");
-  if (userStoreTrusted) {
+  if (userStoreTrusted && !isWindowsServiceAccount()) {
     return {
       certPath,
       keyPath,
@@ -88,16 +102,15 @@ export async function getLocalCaStatus(): Promise<SslTrustStatus> {
     };
   }
 
-  const machineStoreTrusted = await isLocalCaTrustedInStore("LocalMachine");
-  if (machineStoreTrusted) {
+  if (userStoreTrusted) {
     return {
       certPath,
       keyPath,
       exists: true,
-      trusted: true,
+      trusted: false,
       platform: process.platform,
-      store: "LocalMachine\\Root",
-      message: "Local CA is trusted."
+      store: "CurrentUser\\Root",
+      message: `Local CA is trusted only for ${currentWindowsAccountLabel()}. Trust it in LocalMachine Root so browsers can use it.`
     };
   }
 
@@ -240,30 +253,90 @@ async function isLocalCaTrustedInStore(storeScope: "CurrentUser" | "LocalMachine
   return code === 0;
 }
 
-function runVisibleTrustCommand(caCertPath: string, wait: boolean): Promise<number> {
-  const args = [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
+async function siteCertificateMatchesLocalCa(certPath: string): Promise<boolean> {
+  try {
+    const [siteCertificateRaw, caCertificateRaw] = await Promise.all([readFile(certPath, "utf8"), readFile(localCaCertPath(), "utf8")]);
+    const siteCertificate = new X509Certificate(siteCertificateRaw);
+    const caCertificate = new X509Certificate(caCertificateRaw);
+    return siteCertificate.issuer === caCertificate.subject && siteCertificate.verify(caCertificate.publicKey);
+  } catch {
+    return false;
+  }
+}
+
+async function runVisibleTrustCommand(caCertPath: string, wait: boolean): Promise<number> {
+  const scriptPath = await writeTrustLocalCaScript(caCertPath);
+  await appendLog("ssl", "requesting LocalMachine Root trust for local CA");
+
+  const directCode = await runPowerShellScript(scriptPath);
+  if (directCode === 0) {
+    return 0;
+  }
+
+  return runElevatedPowerShell(scriptPath, wait);
+}
+
+async function writeTrustLocalCaScript(caCertPath: string): Promise<string> {
+  const scriptPath = path.join(getPaths().home, "trust-local-ca-elevated.ps1");
+  await mkdir(getPaths().home, { recursive: true });
+  await writeFile(
+    scriptPath,
     [
-      "$cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($env:LARABOXS_CA_CERT)",
-      "$store = New-Object Security.Cryptography.X509Certificates.X509Store('Root', [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)",
-      "$store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)",
-      "$store.Add($cert)",
-      "$store.Close()",
-      "Write-Host 'laraboxs local CA trusted in CurrentUser Root.'"
-    ].join("; ")
-  ];
-  const child = spawn("powershell.exe", args, {
-    env: { ...process.env, LARABOXS_CA_CERT: caCertPath },
-    stdio: wait ? "inherit" : "ignore",
+      '$ErrorActionPreference = "Stop"',
+      `$certPath = '${escapePowerShellString(caCertPath)}'`,
+      "$cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($certPath)",
+      "$store = $null",
+      "try {",
+      "  $store = New-Object Security.Cryptography.X509Certificates.X509Store('Root', [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)",
+      "  $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)",
+      "  $alreadyTrusted = $false",
+      "  foreach ($item in $store.Certificates) { if ($item.Thumbprint -eq $cert.Thumbprint) { $alreadyTrusted = $true; break } }",
+      "  if (-not $alreadyTrusted) { $store.Add($cert) }",
+      "} finally {",
+      "  if ($store -ne $null) { $store.Close() }",
+      "}",
+      "Write-Host 'laraboxs local CA trusted in LocalMachine Root.'"
+    ].join("\n"),
+    "utf8"
+  );
+  return scriptPath;
+}
+
+function runPowerShellScript(scriptPath: string): Promise<number> {
+  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+    stdio: "ignore",
     shell: false,
-    detached: !wait,
-    windowsHide: false
+    windowsHide: true
+  });
+
+  return new Promise((resolve) => {
+    child.once("error", () => resolve(1));
+    child.once("exit", (code) => resolve(code ?? 1));
+  });
+}
+
+function runElevatedPowerShell(scriptPath: string, wait: boolean): Promise<number> {
+  const processArgs = "@('-NoProfile','-ExecutionPolicy','Bypass','-File',$script)";
+  const command = wait
+    ? [
+        `$script = '${escapePowerShellString(scriptPath)}'`,
+        `$process = Start-Process -FilePath powershell.exe -ArgumentList ${processArgs} -Verb RunAs -Wait -PassThru -WindowStyle Hidden`,
+        "exit $process.ExitCode"
+      ].join("; ")
+    : [
+        `$script = '${escapePowerShellString(scriptPath)}'`,
+        `Start-Process -FilePath powershell.exe -ArgumentList ${processArgs} -Verb RunAs -WindowStyle Hidden`,
+        "exit 0"
+      ].join("; ");
+
+  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
+    stdio: "ignore",
+    shell: false,
+    windowsHide: true
   });
 
   if (!wait) {
+    child.once("error", () => undefined);
     child.unref();
     return Promise.resolve(0);
   }
@@ -314,4 +387,24 @@ function runHidden(command: string, args: string[], env: Record<string, string> 
       }
     });
   });
+}
+
+function isWindowsServiceAccount(): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+
+  const username = (process.env.USERNAME ?? "").toUpperCase();
+  const userProfile = (process.env.USERPROFILE ?? "").toLowerCase();
+  return username === "SYSTEM" || username === "LOCAL SERVICE" || username === "NETWORK SERVICE" || userProfile.includes("\\system32\\config\\systemprofile");
+}
+
+function currentWindowsAccountLabel(): string {
+  const domain = process.env.USERDOMAIN;
+  const username = process.env.USERNAME;
+  return [domain, username].filter(Boolean).join("\\") || "the helper service account";
+}
+
+function escapePowerShellString(value: string): string {
+  return value.replace(/'/g, "''");
 }

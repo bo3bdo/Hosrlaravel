@@ -486,7 +486,14 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/ssl/trust") {
-      const status = await trustLocalCa({ wait: false });
+      const status = await trustLocalCa({ wait: true });
+      if (status.platform === "win32" && !status.trusted) {
+        throw new ApiHttpError(409, status.message ?? "Local CA trust did not complete.");
+      }
+      await writeNginxConfigs();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
       await sendJson(response, { ok: true, status, summary: await getDashboardSummary() });
       return;
     }

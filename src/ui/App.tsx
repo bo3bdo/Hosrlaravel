@@ -2492,6 +2492,11 @@ function SslTrustPanel({ summary, post, busy }: ViewProps) {
   const tone = ssl.trusted ? "green" : ssl.exists ? "amber" : "red";
   const label = ssl.trusted ? "trusted" : ssl.exists ? "untrusted" : "missing";
 
+  async function trustCa() {
+    await post("/api/ssl/trust");
+    showToast("Local CA trusted in Windows Root.", "success");
+  }
+
   return (
     <div className="ssl-trust-panel">
       <div className="ssl-trust-main">
@@ -2502,7 +2507,7 @@ function SslTrustPanel({ summary, post, busy }: ViewProps) {
         </div>
       </div>
       <Badge label={label} tone={tone} />
-      <button className={!ssl.trusted ? "primary" : ""} disabled={busy || ssl.trusted || ssl.platform !== "win32"} onClick={() => void post("/api/ssl/trust")}>
+      <button className={!ssl.trusted ? "primary" : ""} disabled={busy || ssl.trusted || ssl.platform !== "win32"} onClick={() => void trustCa()}>
         <ShieldCheck size={18} />
         <span>{ssl.trusted ? "Trusted" : "Trust CA"}</span>
       </button>
@@ -3415,6 +3420,11 @@ function SettingsView({
     setHostsPreview(payload.hosts ?? "");
   }
 
+  async function trustCa() {
+    await post("/api/ssl/trust");
+    showToast("Local CA trusted in Windows Root.", "success");
+  }
+
   async function loadLaravelInstallerStatus() {
     setInstallerBusy(true);
     try {
@@ -3611,7 +3621,7 @@ function SettingsView({
               <button disabled={busy} onClick={() => void post("/api/open-path", { path: summary.ssl.certPath, reveal: true })} title="Show certificate">
                 <FolderOpen size={16} />
               </button>
-              <button className={!summary.ssl.trusted ? "primary" : ""} disabled={busy || summary.ssl.trusted || summary.ssl.platform !== "win32"} onClick={() => void post("/api/ssl/trust")} title="Trust CA">
+              <button className={!summary.ssl.trusted ? "primary" : ""} disabled={busy || summary.ssl.trusted || summary.ssl.platform !== "win32"} onClick={() => void trustCa()} title="Trust CA">
                 <Lock size={16} />
               </button>
             </div>
