@@ -2,11 +2,15 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, updateConfig } from "./config.js";
+import { tryEnsureWindowsDefenderExclusion } from "./defender.js";
 import type { Framework, LaraboxsConfig, Site } from "./types.js";
 
-export async function addParkedFolder(folder: string): Promise<LaraboxsConfig> {
+export async function addParkedFolder(folder: string, options: { defenderExclusion?: boolean } = {}): Promise<LaraboxsConfig> {
   const resolved = path.resolve(folder);
   await mkdir(resolved, { recursive: true });
+  if (options.defenderExclusion !== false) {
+    await tryEnsureWindowsDefenderExclusion(resolved);
+  }
 
   return updateConfig((config) => {
     if (!config.parkedFolders.includes(resolved)) {

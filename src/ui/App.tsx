@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeCheck,
   CheckCircle2,
@@ -49,12 +49,14 @@ import type {
   RuntimeInstallStatus,
   RuntimeKind,
   ServiceStatus,
+  SiteCreationJob,
   Site,
   SiteCreationResult
 } from "./types.js";
 
 type Section = "sites" | "services" | "logs" | "settings";
 type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
+type DatabaseEngine = "mysql" | "mariadb";
 type RuntimeJobMap = Record<string, RuntimeInstallJob>;
 type WizardStepId = "folder" | "install" | "finish";
 type WizardTaskStatus = "pending" | "running" | "complete" | "failed";
@@ -581,7 +583,7 @@ function FirstRunWizard({
               </div>
               <div className="wizard-runtime-choice">
                 <span className="eyebrow">Database</span>
-                <RuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
+                <DatabaseRuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
               </div>
             </div>
           ) : null}
@@ -860,6 +862,19 @@ function databaseRuntimeDisplay(runtime?: RuntimeInstallStatus): string {
 
 function databaseEngineName(runtime?: RuntimeInstallStatus): string {
   return runtime?.name === "MariaDB" ? "MariaDB" : "MySQL";
+}
+
+function databaseEngineKey(runtime?: RuntimeInstallStatus): DatabaseEngine {
+  return runtime?.name === "MariaDB" || runtime?.version.toLowerCase().startsWith("mariadb-") ? "mariadb" : "mysql";
+}
+
+function databaseRuntimesForEngine(runtimes: RuntimeInstallStatus[], engine: DatabaseEngine): RuntimeInstallStatus[] {
+  return runtimes.filter((runtime) => databaseEngineKey(runtime) === engine);
+}
+
+function preferredDatabaseRuntime(runtimes: RuntimeInstallStatus[]): RuntimeInstallStatus | undefined {
+  const installed = runtimes.filter((runtime) => runtime.installed);
+  return preferredRuntime(installed.length ? installed : runtimes);
 }
 
 function databaseVersionDisplay(version: string): string {
@@ -1240,7 +1255,7 @@ function Services({
         {showMysql ? (
         <div className="service-panel wide-service-panel">
           <ServiceHeader icon={Database} title={activeDatabaseName} service={summary.services.mysql} detail={`${activeDatabaseLabel} · 127.0.0.1:${summary.config.mysql.port}`} />
-          <RuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
+          <DatabaseRuntimePicker runtimes={summary.runtimes.mysql} value={mysqlVersion} onChange={setMysqlVersion} />
           {mysqlJob && (isActiveRuntimeJob(mysqlJob) || mysqlJob.status === "failed") ? <RuntimeProgress job={mysqlJob} /> : null}
           <div className="service-actions">
             {mysqlRuntime ? (
@@ -1506,6 +1521,35 @@ function RuntimePicker({ runtimes, value, onChange }: { runtimes: RuntimeInstall
   );
 }
 
+function DatabaseRuntimePicker({ runtimes, value, onChange }: { runtimes: RuntimeInstallStatus[]; value: string; onChange: (version: string) => void }) {
+  const selectedRuntime = runtimes.find((runtime) => runtime.version === value) ?? runtimes[0];
+  const selectedEngine = databaseEngineKey(selectedRuntime);
+  const mysqlRuntimes = databaseRuntimesForEngine(runtimes, "mysql");
+  const mariadbRuntimes = databaseRuntimesForEngine(runtimes, "mariadb");
+  const visibleRuntimes = databaseRuntimesForEngine(runtimes, selectedEngine);
+
+  function chooseEngine(engine: DatabaseEngine) {
+    const nextRuntime = preferredDatabaseRuntime(databaseRuntimesForEngine(runtimes, engine));
+    if (nextRuntime) {
+      onChange(nextRuntime.version);
+    }
+  }
+
+  return (
+    <div className="database-runtime-picker">
+      <div className="segmented database-engine-segmented" aria-label="Database engine">
+        <button className={selectedEngine === "mysql" ? "active" : ""} disabled={!mysqlRuntimes.length} onClick={() => chooseEngine("mysql")}>
+          MySQL
+        </button>
+        <button className={selectedEngine === "mariadb" ? "active" : ""} disabled={!mariadbRuntimes.length} onClick={() => chooseEngine("mariadb")}>
+          MariaDB
+        </button>
+      </div>
+      <RuntimePicker runtimes={visibleRuntimes} value={value} onChange={onChange} />
+    </div>
+  );
+}
+
 function Setup({
   summary,
   installJobs,
@@ -1539,7 +1583,7 @@ function Setup({
         install={startRuntimeInstall}
         uninstall={removeRuntime}
       />
-      <RuntimePanel title="Database" kind="mysql" items={summary.runtimes.mysql} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
+      <DatabaseRuntimePanel items={summary.runtimes.mysql} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
       <RuntimePanel title="Redis" kind="redis" items={[summary.runtimes.redis]} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
       <RuntimePanel title="Node.js" kind="node" items={[summary.runtimes.node]} installJobs={installJobs} busy={busy} install={startRuntimeInstall} uninstall={removeRuntime} />
       <RuntimePanel
@@ -1624,6 +1668,77 @@ function RuntimePanel({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function DatabaseRuntimePanel({
+  items,
+  installJobs,
+  busy,
+  install,
+  uninstall
+}: {
+  items: RuntimeInstallStatus[];
+  installJobs: RuntimeJobMap;
+  busy: boolean;
+  install: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
+  uninstall: (kind: RuntimeKind, version?: string) => Promise<void>;
+}) {
+  const [version, setVersion] = useState(preferredDatabaseRuntime(items)?.version ?? items[0]?.version ?? "");
+  const jobs = Object.values(installJobs);
+  const selected = items.find((item) => item.version === version) ?? preferredDatabaseRuntime(items) ?? items[0];
+  const job = selected ? latestRuntimeJob(jobs, "mysql", selected.version) : undefined;
+  const activeJob = job ? isActiveRuntimeJob(job) : false;
+  const showProgress = job ? activeJob || job.status === "failed" : false;
+
+  useEffect(() => {
+    if (items.length && !items.some((item) => item.version === version)) {
+      setVersion(preferredDatabaseRuntime(items)?.version ?? items[0].version);
+    }
+  }, [items, version]);
+
+  async function removeInstalledDatabase() {
+    if (!selected) {
+      return;
+    }
+    const displayVersion = runtimeDisplayVersion(selected);
+    if (!window.confirm(`Remove ${displayVersion}? This deletes the app-local ${selected.name} runtime folder, including local database data. Stop the database first.`)) {
+      return;
+    }
+    await uninstall("mysql", selected.version);
+  }
+
+  return (
+    <div className="panel">
+      <h2>Database</h2>
+      <DatabaseRuntimePicker runtimes={items} value={selected?.version ?? version} onChange={setVersion} />
+      {selected ? (
+        <div className="runtime-row selected-runtime-row">
+          <div className="runtime-row-main">
+            <div className="runtime-version-info">
+              <strong>{runtimeDisplayVersion(selected)}</strong>
+              <span>{selected.installed ? (selected.updateAvailable ? "Update available" : "Installed") : runtimeStatusLabel(job)}</span>
+            </div>
+            <div className="runtime-actions">
+              <button
+                className={!selected.installed || selected.updateAvailable ? "primary" : ""}
+                disabled={busy || (selected.installed && !selected.updateAvailable) || activeJob}
+                onClick={() => void install("mysql", selected.version, Boolean(selected.updateAvailable))}
+              >
+                <Download size={18} />
+                <span>{runtimeActionLabel(selected, job, `Install ${databaseRuntimeDisplay(selected)}`)}</span>
+              </button>
+              {selected.installed ? (
+                <button className="danger-icon-button" disabled={busy || activeJob} onClick={() => void removeInstalledDatabase()} title={`Remove ${selected.name} ${runtimeDisplayVersion(selected)}`}>
+                  <Trash2 size={18} />
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {showProgress ? <RuntimeProgress job={job!} /> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1747,10 +1862,13 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
                   <ExternalLink size={15} />
                   <span>{selectedSite.url}</span>
                 </button>
+                <span className={selectedSite.secured ? "site-security-badge secured" : "site-security-badge"}>
+                  {selectedSite.secured ? "HTTPS enabled" : "HTTP only"}
+                </span>
               </div>
               <button className={selectedSite.secured ? "" : "primary"} disabled={busy || (selectedSite.secured && !summary.ssl.trusted)} onClick={() => void post(selectedSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: selectedSite.domain })}>
-                {selectedSite.secured ? <LockOpen size={18} /> : <Lock size={18} />}
-                <span>{selectedSite.secured ? "Unsecure" : "Secure"}</span>
+                {selectedSite.secured ? <Lock size={18} /> : <LockOpen size={18} />}
+                <span>{selectedSite.secured ? "Disable SSL" : "Enable SSL"}</span>
               </button>
             </div>
 
@@ -1862,6 +1980,8 @@ function NewSitePanel({
   const [installerStatus, setInstallerStatus] = useState<LaravelInstallerStatus | null>(null);
   const [installerBusy, setInstallerBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [creationJob, setCreationJob] = useState<SiteCreationJob | null>(null);
+  const [completedJobId, setCompletedJobId] = useState("");
   const [panelError, setPanelError] = useState<string | null>(null);
   const working = busy || installerBusy || creating;
   const canCreate = name.trim().length > 0 && parentPath.trim().length > 0;
@@ -1890,6 +2010,58 @@ function NewSitePanel({
   useEffect(() => {
     void loadInstallerStatus();
   }, []);
+
+  useEffect(() => {
+    if (!creationJob || creationJob.id === "local" || creationJob.status === "complete" || creationJob.status === "failed") {
+      return;
+    }
+
+    const activeJobId = creationJob.id;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    async function pollCreationJob() {
+      try {
+        const response = await fetch(apiUrl(`/api/sites/create/jobs/${encodeURIComponent(activeJobId)}`));
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+        const payload = (await response.json()) as { job: SiteCreationJob };
+        if (cancelled) {
+          return;
+        }
+        setCreationJob(payload.job);
+        if (payload.job.status === "complete") {
+          setCreating(false);
+          setPanelError(null);
+          if (payload.job.result?.site && completedJobId !== payload.job.id) {
+            setCompletedJobId(payload.job.id);
+            window.setTimeout(() => onCreated(payload.job.result!.site), 900);
+          }
+          return;
+        }
+        if (payload.job.status === "failed") {
+          setCreating(false);
+          setPanelError(`Create site failed: ${payload.job.error ?? payload.job.message}`);
+          return;
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCreating(false);
+          setPanelError(`Create site status failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return;
+      }
+
+      timer = window.setTimeout(pollCreationJob, 900);
+    }
+
+    timer = window.setTimeout(pollCreationJob, 500);
+    return () => {
+      cancelled = true;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [completedJobId, creationJob, onCreated]);
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -1942,26 +2114,54 @@ function NewSitePanel({
 
   async function createSite() {
     setCreating(true);
+    setPanelError(null);
+    setCreationJob({
+      id: "local",
+      status: "queued",
+      percent: 0,
+      message: "Sending create request.",
+      logs: [{ at: new Date().toISOString(), level: "info", message: "Sending create request." }],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
     try {
-      const payload = (await request("/api/sites/create", {
-        name,
-        parentPath,
-        preset,
-        starterKit,
-        auth,
-        database,
-        packageManager,
-        testing,
-        git,
-        boost
-      })) as { result?: SiteCreationResult };
-      if (payload.result?.site) {
-        onCreated(payload.result.site);
+      const response = await fetch(apiUrl("/api/sites/create"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          parentPath,
+          preset,
+          starterKit,
+          auth,
+          database,
+          packageManager,
+          testing,
+          git,
+          boost
+        })
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const payload = (await response.json()) as { job?: SiteCreationJob };
+      if (!payload.job) {
+        throw new Error("Site creation job was not returned.");
       }
+      setCreationJob(payload.job);
+      setCompletedJobId("");
       setPanelError(null);
     } catch (error) {
       setPanelError(`Create site failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
+      setCreationJob((current) =>
+        current
+          ? {
+              ...current,
+              status: "failed",
+              message: error instanceof Error ? error.message : String(error),
+              error: error instanceof Error ? error.message : String(error),
+              logs: [...current.logs, { at: new Date().toISOString(), level: "error", message: error instanceof Error ? error.message : String(error) }]
+            }
+          : current
+      );
       setCreating(false);
     }
   }
@@ -2088,15 +2288,53 @@ function NewSitePanel({
         <div className={panelError ? "new-site-message error" : "new-site-message"}>{panelError ?? requirementsMessage}</div>
       ) : null}
 
+      {creationJob ? <SiteCreationProgressPanel job={creationJob} /> : null}
+
       <div className="new-site-actions">
         <button className="primary" disabled={working || !canCreate} onClick={() => void createSite()} title="Create site">
           {creating ? <LoaderCircle className="spin" size={18} /> : <PackageCheck size={18} />}
-          <span>Create</span>
+          <span>{creating ? "Creating" : "Create"}</span>
         </button>
         <button disabled={working} onClick={onClose} title="Cancel">
           <CircleStop size={18} />
           <span>Cancel</span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+function SiteCreationProgressPanel({ job }: { job: SiteCreationJob }) {
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const tone = job.status === "complete" ? "success" : job.status === "failed" ? "error" : "running";
+  const statusLabel = job.status === "complete" ? "Complete" : job.status === "failed" ? "Failed" : job.status === "queued" ? "Queued" : "Running";
+
+  useEffect(() => {
+    const element = logRef.current;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [job.logs.length, job.message]);
+
+  return (
+    <div className={`new-site-progress-panel ${tone}`}>
+      <div className="new-site-progress-header">
+        <div>
+          <strong>{statusLabel}</strong>
+          <span>{job.message}</span>
+        </div>
+        <span>{job.percent}%</span>
+      </div>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${job.percent}%` }} />
+      </div>
+      <div ref={logRef} className="new-site-log" aria-label="Site creation log">
+        {job.logs.map((entry, index) => (
+          <div key={`${entry.at}-${index}`} className={`new-site-log-line ${entry.level}`}>
+            <span>{new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+            <p>{entry.message}</p>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -2834,15 +3072,9 @@ function Mysql({
       {installJob && showInstallProgress ? <RuntimeProgress job={installJob} /> : null}
       <div className="panel">
         <h2>Version</h2>
-        <div className="segmented">
-          {summary.runtimes.mysql.map((runtime) => (
-            <button key={runtime.version} className={selectedVersion === runtime.version ? "active" : ""} onClick={() => setSelectedVersion(runtime.version)}>
-              {runtimeDisplayVersion(runtime)}
-            </button>
-          ))}
-        </div>
+        <DatabaseRuntimePicker runtimes={summary.runtimes.mysql} value={selectedVersion} onChange={setSelectedVersion} />
         <div className="button-row">
-          <button disabled={busy || selectedVersion === summary.config.mysql.version || mysql.state === "running"} onClick={() => void post("/api/mysql/version", { version: selectedVersion })}>
+          <button disabled={busy || !selectedRuntime?.installed || selectedVersion === summary.config.mysql.version || mysql.state === "running"} onClick={() => void post("/api/mysql/version", { version: selectedVersion })}>
             <BadgeCheck size={18} />
             <span>Use Version</span>
           </button>
@@ -3253,16 +3485,10 @@ function SettingsView({
                 ))}
               </select>
             </label>
-            <label>
+            <div className="settings-database-choice">
               <span>Database</span>
-              <select value={databaseChoice} onChange={(event) => setDatabaseChoice(event.target.value)}>
-                {summary.runtimes.mysql.map((runtime) => (
-                  <option key={runtime.version} value={runtime.version}>
-                    {runtimeDisplayVersion(runtime)}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <DatabaseRuntimePicker runtimes={summary.runtimes.mysql} value={databaseChoice} onChange={setDatabaseChoice} />
+            </div>
           </div>
           <div className="settings-actions">
             <button className="primary" disabled={busy || !tldValid || !tldChanged} onClick={() => void saveGeneralSettings()} title="Save local TLD">
@@ -3274,9 +3500,9 @@ function SettingsView({
               <span>Use PHP</span>
             </button>
             <button
-              disabled={busy || databaseChoice === summary.config.mysql.version || databaseRunning}
+              disabled={busy || !selectedDatabase?.installed || databaseChoice === summary.config.mysql.version || databaseRunning}
               onClick={() => void post("/api/mysql/version", { version: databaseChoice })}
-              title={databaseRunning ? "Stop the database before switching runtime" : `Use ${databaseRuntimeDisplay(selectedDatabase)}`}
+              title={!selectedDatabase?.installed ? "Install the selected database first" : databaseRunning ? "Stop the database before switching runtime" : `Use ${databaseRuntimeDisplay(selectedDatabase)}`}
             >
               <Database size={16} />
               <span>Use DB</span>

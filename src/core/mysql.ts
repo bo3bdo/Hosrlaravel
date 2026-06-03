@@ -54,11 +54,15 @@ export async function initializeMysqlDataDir(): Promise<ServiceStatus> {
   }
 
   if ((await isDirectoryNonEmpty(paths.data)) && !existsSync(marker)) {
-    throw new Error(`${runtime.name} data directory is not empty but does not look initialized: ${paths.data}`);
+    if (isMariaDbRuntime(runtime)) {
+      await resetIncompleteMariaDbDataDir(paths.data);
+    } else {
+      throw new Error(`${runtime.name} data directory is not empty but does not look initialized: ${paths.data}`);
+    }
   }
 
   const initSpec = isMariaDbRuntime(runtime)
-    ? buildMariaDbInstallDbCommand(config.mysql.version, password)
+    ? buildMariaDbInstallDbCommand(config.mysql.version, password, config.mysql.port)
     : {
         command: mysqlBinaryPath("mysqld", config.mysql.version),
         args: [`--defaults-file=${paths.config}`, "--initialize-insecure", `--user=${config.mysql.rootUser}`],
@@ -81,6 +85,7 @@ export async function initializeMysqlDataDir(): Promise<ServiceStatus> {
   await waitForMysql(20_000);
   await applyRootPasswordAfterInitialization(password, isMariaDbRuntime(runtime) ? password : undefined);
   await runMysql("stop");
+  await waitForMysqlStopped(10_000);
   await appendLog("mysql", `${runtime.name} data directory initialized and root password applied`);
   return getMysqlStatus(`${runtime.name} data directory initialized.`);
 }
@@ -194,6 +199,13 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
     return getMysqlStatus("start requested; already running");
   }
 
+  if (action === "start") {
+    const initialized = await ensureMysqlInitializedForStart();
+    if (initialized && initialized.state === "unknown") {
+      return initialized;
+    }
+  }
+
   const command = await buildMysqlCommand(action);
 
   if (isMissingWindowsMysqlBinary(command.command)) {
@@ -214,6 +226,7 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
     if (code !== 0) {
       await stopAppLocalMysqlProcesses();
     }
+    await waitForMysqlStopped(10_000);
     await appendLog("mysql", "stop requested");
     return getMysqlStatus("stop requested");
   }
@@ -396,11 +409,37 @@ function databaseDisplayVersion(version: string): string {
   return version.toLowerCase().startsWith("mariadb-") ? version.slice("mariadb-".length) : version;
 }
 
-function buildMariaDbInstallDbCommand(version: string, password: string): CommandSpec {
+async function ensureMysqlInitializedForStart(): Promise<ServiceStatus | undefined> {
+  const config = await loadConfig();
+  const paths = mysqlPathsForVersion(config.mysql.version);
+  if (existsSync(path.join(paths.data, "mysql"))) {
+    return undefined;
+  }
+  await appendLog("mysql", "data directory is not initialized; initializing before start");
+  const status = await initializeMysqlDataDir();
+  return existsSync(path.join(paths.data, "mysql")) ? undefined : status;
+}
+
+async function resetIncompleteMariaDbDataDir(dataDir: string): Promise<void> {
+  const entries = await readdir(dataDir, { withFileTypes: true }).catch(() => []);
+  if (!entries.length) {
+    return;
+  }
+
+  if (entries.some((entry) => entry.isDirectory())) {
+    throw new Error(`MariaDB data directory is not initialized and contains folders: ${dataDir}`);
+  }
+
+  await appendLog("mysql", `removing incomplete MariaDB data directory at ${dataDir}`);
+  await rm(dataDir, { recursive: true, force: true });
+  await mkdir(dataDir, { recursive: true });
+}
+
+function buildMariaDbInstallDbCommand(version: string, password: string, port: number): CommandSpec {
   const paths = mysqlPathsForVersion(version);
   return {
     command: mariaDbInstallDbPath(version),
-    args: [`--basedir=${paths.root}`, `--datadir=${paths.data}`, `--password=${password}`],
+    args: [`--datadir=${paths.data}`, `--password=${password}`, `--port=${port}`, `--config=${paths.config}`, "--silent"],
     cwd: paths.root
   };
 }
@@ -513,6 +552,18 @@ async function waitForMysql(timeoutMs: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`MySQL did not become reachable on 127.0.0.1:${config.mysql.port}.`);
+}
+
+async function waitForMysqlStopped(timeoutMs: number): Promise<void> {
+  const config = await loadConfig();
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!(await canConnect("127.0.0.1", config.mysql.port, 250))) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 function isMissingWindowsMysqlBinary(command: string): boolean {

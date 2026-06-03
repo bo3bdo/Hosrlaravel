@@ -8,6 +8,7 @@ import { getPaths, toNginxPath } from "./paths.js";
 import { ensurePhpFastCgiWorkers, phpFastCgiPort } from "./php.js";
 import { generatePhpMyAdminNginxConfig } from "./phpmyadmin.js";
 import { discoverSites } from "./sites.js";
+import { ensureSiteCertificate } from "./ssl.js";
 import type { CommandSpec, NginxConfig, ServiceAction, ServiceStatus, Site } from "./types.js";
 
 export function generateNginxMainConfig(): string {
@@ -23,6 +24,8 @@ export function generateNginxMainConfig(): string {
     "http {",
     "    include       mime.types;",
     "    default_type  application/octet-stream;",
+    "    server_names_hash_bucket_size 128;",
+    "    server_names_hash_max_size 2048;",
     `    access_log    "${toNginxPath(path.join(paths.logs, "nginx-access.log"))}";`,
     `    error_log     "${toNginxPath(path.join(paths.logs, "nginx-error.log"))}";`,
     "    sendfile      on;",
@@ -34,6 +37,7 @@ export function generateNginxMainConfig(): string {
 
 export async function generateNginxSiteConfig(site: Site): Promise<string> {
   const config = await loadConfig();
+  await ensureSiteCertificate(site.domain);
   const root = toNginxPath(site.documentRoot);
   const fastCgiPort = phpFastCgiPort(site.phpVersion);
   const certificate = toNginxPath(path.join(getPaths().certs, `${site.domain}.crt`));
@@ -64,6 +68,14 @@ export async function generateNginxSiteConfig(site: Site): Promise<string> {
       "server {",
       `    listen 127.0.0.1:${config.nginx.httpPort};`,
       appServer,
+      "}",
+      "",
+      "server {",
+      `    listen 127.0.0.1:${config.nginx.httpsPort} ssl;`,
+      `    ssl_certificate "${certificate}";`,
+      `    ssl_certificate_key "${key}";`,
+      `    server_name ${site.domain};`,
+      "    return 301 http://$host$request_uri;",
       "}"
     ].join("\n");
   }
@@ -160,7 +172,6 @@ export function buildNginxCommand(action: ServiceAction): CommandSpec {
 
 export async function runNginx(action: ServiceAction): Promise<ServiceStatus> {
   await writeNginxConfigs();
-  const command = buildNginxCommand(action);
 
   if (!existsSync(nginxBinaryPath())) {
     const message = `Nginx is not installed. Install it from Setup or the Nginx page.`;
@@ -168,10 +179,23 @@ export async function runNginx(action: ServiceAction): Promise<ServiceStatus> {
     return { name: "nginx", state: "unknown", logPath: path.join(getPaths().logs, "nginx-error.log"), message };
   }
 
+  if (process.platform === "win32") {
+    await stopAppLocalNginxProcesses();
+  }
+
+  if (action === "stop") {
+    if (process.platform !== "win32") {
+      await runHidden(buildNginxCommand("stop"));
+    }
+    await appendLog("nginx", "stop requested");
+    return getNginxStatus("stop requested");
+  }
+
   if (action === "start" || action === "restart") {
     await ensurePhpFastCgiWorkers();
   }
 
+  const command = buildNginxCommand(process.platform === "win32" && action === "restart" ? "start" : action);
   const child = spawn(command.command, command.args, {
     cwd: getPaths().nginxRoot,
     detached: true,
@@ -196,6 +220,46 @@ export function getNginxStatus(message?: string): ServiceStatus {
     logPath: path.join(getPaths().logs, "nginx-error.log"),
     message
   };
+}
+
+async function stopAppLocalNginxProcesses(): Promise<void> {
+  const paths = getPaths();
+  const script = [
+    `$nginxRoot = '${escapePowerShellString(paths.nginxRoot)}'`,
+    "Get-CimInstance Win32_Process -Filter \"name = 'nginx.exe'\" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($nginxRoot, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+  ].join("; ");
+
+  const code = await runHidden({
+    command: "powershell.exe",
+    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+  });
+  await rm(path.join(paths.logs, "nginx.pid"), { force: true });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
+  if (code !== 0) {
+    await appendLog("nginx", `fallback process stop exited with code ${code}`);
+  } else {
+    await appendLog("nginx", "fallback process stop requested for app-local nginx.exe");
+  }
+}
+
+function runHidden(command: CommandSpec): Promise<number> {
+  const child = spawn(command.command, command.args, {
+    cwd: command.cwd,
+    env: { ...process.env, ...(command.env ?? {}) },
+    stdio: "ignore",
+    shell: false,
+    windowsHide: true
+  });
+
+  return new Promise((resolve) => {
+    child.once("error", () => resolve(1));
+    child.once("exit", (code) => resolve(code ?? 1));
+  });
+}
+
+function escapePowerShellString(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 function validatePort(value: number, label: string): number {

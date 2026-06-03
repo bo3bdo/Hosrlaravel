@@ -31,9 +31,10 @@ import { selectFolder } from "./dialogs.js";
 import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
 import { getDashboardSummary } from "../core/summary.js";
 import { readSitePreviewImage } from "../core/sitePreview.js";
-import { createNewSite, getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
+import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
 import { clearLogs } from "../core/logging.js";
 import type { NewSiteRequest, RuntimeKind, ServiceAction } from "../core/types.js";
+import { getSiteCreationJob, startSiteCreationJob } from "./siteJobs.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.LARABOXS_API_PORT ?? 47899);
@@ -122,15 +123,22 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname.startsWith("/api/sites/create/jobs/")) {
+      const jobId = decodeURIComponent(url.pathname.slice("/api/sites/create/jobs/".length));
+      const job = getSiteCreationJob(jobId);
+      if (!job) {
+        response.writeHead(404, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "Site creation job not found." }));
+        return;
+      }
+      await sendJson(response, { job });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/sites/create") {
       const body = await readJson(request);
-      const result = await createNewSite(assertNewSiteRequest(body));
-      await writeNginxConfigs();
-      await syncHostsFile();
-      if (getNginxStatus().state === "running") {
-        await runNginx("restart");
-      }
-      await sendJson(response, { ok: true, result, summary: await getDashboardSummary() });
+      const job = startSiteCreationJob(assertNewSiteRequest(body));
+      await sendJson(response, { ok: true, job });
       return;
     }
 

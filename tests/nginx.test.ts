@@ -32,6 +32,19 @@ describe("nginx config generation", () => {
 
     expect(config).toContain("nginx.pid");
     expect(config).toContain("/logs/nginx.pid");
+    expect(config).toContain("server_names_hash_bucket_size 128;");
+    expect(config).toContain("server_names_hash_max_size 2048;");
+  });
+
+  it("uses the site's own certificate when HTTPS is requested for an unsecured site", async () => {
+    const [site] = await discoverSites();
+    const config = await generateNginxSiteConfig(site);
+
+    expect(config).toContain("listen 127.0.0.1:443 ssl;");
+    expect(config).toContain("ssl_certificate");
+    expect(config).toContain("my-app.test.crt");
+    expect(config).toContain("my-app.test.key");
+    expect(config).toContain("return 301 http://$host$request_uri;");
   });
 
   it("redirects HTTP to HTTPS for secured sites", async () => {

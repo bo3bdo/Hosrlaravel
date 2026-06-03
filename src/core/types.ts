@@ -99,6 +99,28 @@ export interface SiteCreationResult {
   output?: string;
 }
 
+export type SiteCreationJobStatus = "queued" | "running" | "complete" | "failed";
+export type SiteCreationLogLevel = "info" | "success" | "error";
+
+export interface SiteCreationLogEntry {
+  at: string;
+  level: SiteCreationLogLevel;
+  message: string;
+}
+
+export interface SiteCreationJob {
+  id: string;
+  status: SiteCreationJobStatus;
+  percent: number;
+  message: string;
+  logs: SiteCreationLogEntry[];
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  error?: string;
+  result?: SiteCreationResult;
+}
+
 export interface ServiceStatus {
   name: string;
   state: ServiceState;

@@ -3,7 +3,10 @@ import { existsSync } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config.js";
+import { tryEnsureWindowsDefenderExclusion, type DefenderExclusionStatus } from "./defender.js";
+import { updateDotEnvFile } from "./envFile.js";
 import { appendLog } from "./logging.js";
+import { laravelEnv, runCreateDatabase, runMysql } from "./mysql.js";
 import { getPaths } from "./paths.js";
 import { developerCommandPathEntries, findRuntimeEntry, getRuntimeStatus, installRuntime, mergePathEntries } from "./runtimes.js";
 import { addParkedFolder, siteFromProject, slugify } from "./sites.js";
@@ -26,6 +29,8 @@ interface CommandResult {
   stdout: string;
   stderr: string;
 }
+
+export type SiteCreationProgressReporter = (message: string, percent?: number, level?: "info" | "success" | "error") => void;
 
 export function laravelInstallerPaths(): { composerHome: string; binDir: string; proxy: string; batch: string } {
   const composerHome = path.join(getPaths().home, "composer-home");
@@ -123,39 +128,82 @@ export async function uninstallLaravelInstaller(): Promise<LaravelInstallerStatu
   return getLaravelInstallerStatus({ checkLatest: true });
 }
 
-export async function createNewSite(request: NewSiteRequest): Promise<SiteCreationResult> {
+export async function createNewSite(request: NewSiteRequest, onProgress?: SiteCreationProgressReporter): Promise<SiteCreationResult> {
+  onProgress?.("Validating site options", 5);
   const normalized = normalizeNewSiteRequest(request);
   const config = await loadConfig();
   const parentPath = path.resolve(normalized.parentPath || config.parkedFolders[0] || path.join(getPaths().home, "Sites"));
   const projectPath = path.join(parentPath, normalized.name);
 
+  onProgress?.(`Preparing folder ${parentPath}`, 12);
   await mkdir(parentPath, { recursive: true });
+  onProgress?.("Optimizing sites folder for Windows Defender", 15);
+  reportDefenderExclusion(await tryEnsureWindowsDefenderExclusion(parentPath), onProgress);
+  onProgress?.(`Checking project path ${projectPath}`, 18);
   await assertProjectPathAvailable(projectPath);
 
   let command: string | undefined;
   let output: string | undefined;
 
   if (normalized.preset === "laravel") {
-    await ensureLaravelCreationTools(normalized.packageManager, config.globalPhpVersion);
+    onProgress?.("Preparing PHP, Composer, Laravel Installer, and Node tools", 25);
+    await ensureLaravelCreationTools(normalized.packageManager, config.globalPhpVersion, onProgress);
 
     const args = buildLaravelNewArgs(normalized);
-    const result = await runLaravelCommand(args, {
-      cwd: parentPath,
-      timeoutMs: 20 * 60 * 1000
-    });
+    onProgress?.(`Running Laravel Installer: laravel ${args.join(" ")}`, 45);
+    onProgress?.("Downloading Laravel project files and resolving dependencies", 47);
+    let laravelOutputSeen = false;
+    let heartbeatStep = 0;
+    const heartbeatMessages = laravelInstallerProgressMessages(normalized);
+    const heartbeatStartedAt = Date.now();
+    const heartbeat = setInterval(() => {
+      const message = heartbeatMessages[Math.min(heartbeatStep, heartbeatMessages.length - 1)];
+      const percent = Math.min(70, 50 + heartbeatStep * 2);
+      onProgress?.(`${message} (${formatElapsed(heartbeatStartedAt)})`, percent);
+      heartbeatStep += 1;
+    }, 8000);
+    let result: CommandResult;
+    try {
+      result = await runLaravelCommand(args, {
+        cwd: parentPath,
+        timeoutMs: 20 * 60 * 1000,
+        onOutput: (line) => {
+          laravelOutputSeen = true;
+          onProgress?.(`Laravel: ${line}`, Math.min(70, 55 + heartbeatStep));
+        }
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
     command = `laravel ${args.join(" ")}`;
     output = trimCommandOutput(`${result.stdout}\n${result.stderr}`);
+    if (output && !laravelOutputSeen) {
+      for (const line of output.split(/\r?\n/).slice(-12)) {
+        onProgress?.(`Laravel: ${line}`, 65);
+      }
+    }
+    onProgress?.("Laravel project files created", 72, "success");
+    await configureLaravelProjectEnvironment(projectPath, normalized, `${normalized.name}.${config.tld}`, onProgress);
   } else if (normalized.preset === "php") {
+    onProgress?.("Creating PHP project folder", 35);
     await mkdir(projectPath, { recursive: true });
+    onProgress?.("Writing index.php", 55);
     await writeFile(path.join(projectPath, "index.php"), "<?php echo 'Hello from Laraboxs';\n", "utf8");
+    onProgress?.("PHP starter file created", 72, "success");
   } else {
+    onProgress?.("Creating static project folder", 35);
     await mkdir(projectPath, { recursive: true });
+    onProgress?.("Writing index.html", 55);
     await writeFile(path.join(projectPath, "index.html"), "<!doctype html><title>Laraboxs Site</title><h1>Laraboxs Site</h1>\n", "utf8");
+    onProgress?.("Static starter file created", 72, "success");
   }
 
-  const nextConfig = await addParkedFolder(parentPath);
+  onProgress?.("Parking project folder", 80);
+  const nextConfig = await addParkedFolder(parentPath, { defenderExclusion: false });
+  onProgress?.("Detecting new local domain", 86);
   const site = await siteFromProject(projectPath, nextConfig);
   await appendLog("site", `created ${normalized.preset} site ${site.domain} at ${projectPath}`);
+  onProgress?.(`Site detected as ${site.domain}`, 90, "success");
 
   return {
     projectPath,
@@ -169,7 +217,7 @@ export async function createNewSite(request: NewSiteRequest): Promise<SiteCreati
 
 export function buildLaravelNewArgs(request: NewSiteRequest): string[] {
   const normalized = normalizeNewSiteRequest({ ...request, preset: "laravel" });
-  const args = ["new", normalized.name, "--no-interaction", "--no-ansi"];
+  const args = ["new", normalized.name, "--no-interaction", "--no-ansi", "--verbose"];
 
   if (normalized.database) {
     args.push(`--database=${normalized.database}`);
@@ -213,6 +261,112 @@ export function buildLaravelNewArgs(request: NewSiteRequest): string[] {
   }
 
   return args;
+}
+
+function laravelInstallerProgressMessages(request: Required<NewSiteRequest>): string[] {
+  const messages = [
+    "Downloading Laravel application skeleton",
+    "Installing Composer dependencies",
+    "Preparing Laravel configuration files"
+  ];
+
+  if (request.starterKit !== "none") {
+    messages.push(`Scaffolding ${request.starterKit} starter kit`);
+  }
+
+  if (request.packageManager !== "none") {
+    messages.push(`Installing frontend dependencies with ${request.packageManager}`);
+  }
+
+  if (request.boost) {
+    messages.push("Installing Laravel Boost tooling");
+  }
+
+  if (request.git) {
+    messages.push("Initializing Git repository");
+  }
+
+  messages.push("Finalizing Laravel project files");
+  messages.push("Laravel Installer is still working; downloads can take a few minutes");
+  return messages;
+}
+
+function formatElapsed(startedAt: number): string {
+  const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds} elapsed`;
+}
+
+function reportDefenderExclusion(status: DefenderExclusionStatus, onProgress?: SiteCreationProgressReporter): void {
+  if (status.skipped && !status.supported) {
+    onProgress?.("Windows Defender optimization is unavailable on this system", 16);
+    return;
+  }
+
+  if (status.excluded && status.changed) {
+    onProgress?.("Windows Defender exclusion added for sites folder", 16, "success");
+    return;
+  }
+
+  if (status.excluded) {
+    onProgress?.("Windows Defender exclusion already covers sites folder", 16, "success");
+    return;
+  }
+
+  if (!status.skipped) {
+    onProgress?.(status.message, 16, "error");
+  }
+}
+
+async function configureLaravelProjectEnvironment(
+  projectPath: string,
+  request: Required<NewSiteRequest>,
+  domain: string,
+  onProgress?: SiteCreationProgressReporter
+): Promise<void> {
+  const envPath = path.join(projectPath, ".env");
+  const values: Record<string, string> = {
+    APP_URL: `http://${domain}`
+  };
+
+  if (request.database === "mysql" || request.database === "mariadb") {
+    onProgress?.("Configuring local database credentials", 74);
+    const databaseValues = envBlockToRecord(await laravelEnv(request.name));
+    if (request.database === "mariadb") {
+      databaseValues.DB_CONNECTION = "mariadb";
+    }
+    Object.assign(values, databaseValues);
+
+    onProgress?.(`Creating database ${request.name}`, 75);
+    await runMysql("start");
+    await runCreateDatabase(request.name);
+  }
+
+  await updateDotEnvFile(envPath, values);
+  onProgress?.("Laravel environment configured", 76, "success");
+
+  if (request.database === "mysql" || request.database === "mariadb") {
+    onProgress?.("Running Laravel database migrations", 77);
+    await runCommand(await phpBinaryForDeveloperTools(), ["artisan", "migrate", "--force", "--no-interaction"], {
+      cwd: projectPath,
+      timeoutMs: 5 * 60 * 1000,
+      env: await developerToolEnv(),
+      onOutput: (line) => onProgress?.(`Migrate: ${line}`, 78)
+    });
+    onProgress?.("Laravel database migrations completed", 79, "success");
+  }
+}
+
+function envBlockToRecord(block: string): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (const line of block.split(/\r?\n/)) {
+    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (match) {
+      record[match[1]] = match[2];
+    }
+  }
+  return record;
 }
 
 function normalizeNewSiteRequest(request: NewSiteRequest): Required<NewSiteRequest> {
@@ -281,26 +435,35 @@ async function runComposerGlobalCommand(args: string[], options: { cwd: string; 
   });
 }
 
-async function ensurePhpAndComposer(phpVersion: string): Promise<void> {
+async function ensurePhpAndComposer(phpVersion: string, onProgress?: SiteCreationProgressReporter): Promise<void> {
   const php = findRuntimeEntry("php", phpVersion);
   if (!existsSync(php.binary)) {
+    onProgress?.(`Installing PHP ${phpVersion}`, 28);
     await appendLog("site", `installing PHP ${phpVersion} for Laravel Installer`);
     await installRuntime("php", phpVersion);
+    onProgress?.(`PHP ${phpVersion} installed`, 32, "success");
+  } else {
+    onProgress?.(`PHP ${phpVersion} is ready`, 28, "success");
   }
 
   const composer = findRuntimeEntry("composer");
   if (!existsSync(composer.binary)) {
+    onProgress?.("Installing Composer", 32);
     await appendLog("site", "installing Composer for Laravel Installer");
     await installRuntime("composer");
+    onProgress?.("Composer is ready", 36, "success");
+  } else {
+    onProgress?.("Composer is ready", 36, "success");
   }
 }
 
-async function runLaravelCommand(args: string[], options: { cwd: string; timeoutMs: number }): Promise<CommandResult> {
+async function runLaravelCommand(args: string[], options: { cwd: string; timeoutMs: number; onOutput?: (line: string) => void }): Promise<CommandResult> {
   const command = await laravelCommand();
   return runCommand(command.command, [...command.args, ...args], {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
-    env: await developerToolEnv()
+    env: await developerToolEnv(),
+    onOutput: options.onOutput
   });
 }
 
@@ -356,26 +519,48 @@ async function developerToolEnv(): Promise<NodeJS.ProcessEnv> {
   env.COMPOSER_HOME = installer.composerHome;
   env.COMPOSER_CACHE_DIR = path.join(paths.home, "composer-cache");
   env.LARABOXS_HOME = paths.home;
+  applyLocalDevelopmentInstallEnvironment(env);
   delete env.NODE_OPTIONS;
   return env;
 }
 
-async function ensureLaravelCreationTools(packageManager: LaravelPackageManager, phpVersion: string): Promise<void> {
-  await ensurePhpAndComposer(phpVersion);
-
-  const status = await getLaravelInstallerStatus({ checkLatest: false });
-  if (!status.installed) {
-    await installOrUpdateLaravelInstaller();
-  }
-
-  await ensureNodePackageManager(packageManager);
+export function applyLocalDevelopmentInstallEnvironment(env: NodeJS.ProcessEnv): void {
+  env.NODE_ENV = "development";
+  env.npm_config_production = "false";
+  env.NPM_CONFIG_PRODUCTION = "false";
+  env.npm_config_include = "dev";
+  env.NPM_CONFIG_INCLUDE = "dev";
+  env.YARN_PRODUCTION = "false";
+  delete env.npm_config_omit;
+  delete env.NPM_CONFIG_OMIT;
+  delete env.npm_config_only;
+  delete env.NPM_CONFIG_ONLY;
+  delete env.COMPOSER_NO_DEV;
 }
 
-async function ensureNodePackageManager(packageManager: LaravelPackageManager): Promise<void> {
+async function ensureLaravelCreationTools(packageManager: LaravelPackageManager, phpVersion: string, onProgress?: SiteCreationProgressReporter): Promise<void> {
+  await ensurePhpAndComposer(phpVersion, onProgress);
+
+  onProgress?.("Checking Laravel Installer", 38);
+  const status = await getLaravelInstallerStatus({ checkLatest: false });
+  if (!status.installed) {
+    onProgress?.("Installing Laravel Installer", 40);
+    await installOrUpdateLaravelInstaller();
+    onProgress?.("Laravel Installer is ready", 43, "success");
+  } else {
+    onProgress?.(`Laravel Installer ${status.version ?? ""} is ready`.trim(), 43, "success");
+  }
+
+  await ensureNodePackageManager(packageManager, onProgress);
+}
+
+async function ensureNodePackageManager(packageManager: LaravelPackageManager, onProgress?: SiteCreationProgressReporter): Promise<void> {
   if (packageManager === "none") {
+    onProgress?.("Skipping Node package manager install", 44);
     return;
   }
 
+  onProgress?.("Checking Node.js runtime", 44);
   const node = await ensureNodeRuntime();
   const npm = path.join(node.root, "npm.cmd");
   if (!existsSync(npm)) {
@@ -383,22 +568,27 @@ async function ensureNodePackageManager(packageManager: LaravelPackageManager): 
   }
 
   if (packageManager === "npm") {
+    onProgress?.("npm is ready", 44, "success");
     return;
   }
 
   const command = path.join(nodePackageManagerBinDir(), `${packageManager}.cmd`);
   if (existsSync(command)) {
+    onProgress?.(`${packageManager} is ready`, 44, "success");
     return;
   }
 
+  onProgress?.(`Installing ${packageManager}`, 44);
   await mkdir(nodePackageManagerBinDir(), { recursive: true });
   await appendLog("site", `installing ${packageManager} with Laraboxs Node.js`);
   await runCommand(npm, ["install", "--global", "--prefix", nodePackageManagerBinDir(), packageManager], {
     cwd: getPaths().home,
     timeoutMs: 10 * 60 * 1000,
-    env: await developerToolEnv()
+    env: await developerToolEnv(),
+    onOutput: (line) => onProgress?.(line, 44)
   });
   await appendLog("site", `${packageManager} installed at ${nodePackageManagerBinDir()}`);
+  onProgress?.(`${packageManager} installed`, 44, "success");
 }
 
 async function ensureNodeRuntime(): Promise<{ root: string; binary: string }> {
@@ -417,7 +607,7 @@ function nodePackageManagerBinDir(): string {
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv }
+  options: { cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv; onOutput?: (line: string) => void }
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -429,6 +619,9 @@ function runCommand(
     let stdout = "";
     let stderr = "";
     let finished = false;
+    let outputBuffer = "";
+    let lastPartialOutput = "";
+    let lastPartialOutputAt = 0;
     const timer = setTimeout(() => {
       if (!finished) {
         child.kill();
@@ -436,11 +629,50 @@ function runCommand(
       }
     }, options.timeoutMs);
 
+    const emitOutput = (line: string, partial = false) => {
+      const clean = cleanCommandLine(line);
+      if (!clean) {
+        return;
+      }
+      if (partial) {
+        const now = Date.now();
+        if (clean === lastPartialOutput || now - lastPartialOutputAt < 900) {
+          return;
+        }
+        lastPartialOutput = clean;
+        lastPartialOutputAt = now;
+      } else {
+        lastPartialOutput = "";
+      }
+      options.onOutput?.(clean);
+    };
+
+    const handleOutput = (chunk: string) => {
+      outputBuffer += chunk.replace(/\r/g, "\n");
+      if (outputBuffer.includes("\n")) {
+        const lines = outputBuffer.split("\n");
+        outputBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          emitOutput(line);
+        }
+        return;
+      }
+
+      emitOutput(outputBuffer, true);
+      if (outputBuffer.length > 2000) {
+        outputBuffer = outputBuffer.slice(-2000);
+      }
+    };
+
     child.stdout?.on("data", (chunk) => {
-      stdout = appendLimited(stdout, String(chunk));
+      const text = String(chunk);
+      stdout = appendLimited(stdout, text);
+      handleOutput(text);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = appendLimited(stderr, String(chunk));
+      const text = String(chunk);
+      stderr = appendLimited(stderr, text);
+      handleOutput(text);
     });
     child.once("error", (error) => {
       if (!finished) {
@@ -455,6 +687,10 @@ function runCommand(
       }
       finished = true;
       clearTimeout(timer);
+      const cleanTail = cleanCommandLine(outputBuffer);
+      if (cleanTail && cleanTail !== lastPartialOutput) {
+        options.onOutput?.(cleanTail);
+      }
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -507,6 +743,10 @@ function compareDottedVersions(left: string, right: string): number {
     }
   }
   return 0;
+}
+
+function cleanCommandLine(line: string): string {
+  return line.replace(/\u001b\[[0-9;]*m/g, "").trim();
 }
 
 function trimCommandOutput(output: string): string {

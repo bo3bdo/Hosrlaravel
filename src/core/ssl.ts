@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import selfsigned from "selfsigned";
+import { updateDotEnvFile } from "./envFile.js";
 import { appendLog } from "./logging.js";
 import { getPaths } from "./paths.js";
 import { findSite, setSiteSecurity } from "./sites.js";
@@ -12,14 +13,28 @@ const localCaCommonName = "laraboxs Local Development CA";
 
 export async function secureSite(identifier: string): Promise<void> {
   const site = await findSite(identifier);
-  await ensureCertificate(site.domain);
+  await ensureSiteCertificate(site.domain);
   await setSiteSecurity(site.domain, true);
+  await updateSiteAppUrl(site.path, site.domain, true);
   await appendLog("ssl", `marked ${site.domain} as secured`);
 }
 
 export async function unsecureSite(identifier: string): Promise<void> {
-  await setSiteSecurity(identifier, false);
-  await appendLog("ssl", `marked ${identifier} as unsecured`);
+  const site = await findSite(identifier);
+  await setSiteSecurity(site.domain, false);
+  await updateSiteAppUrl(site.path, site.domain, false);
+  await appendLog("ssl", `marked ${site.domain} as unsecured`);
+}
+
+export async function ensureSiteCertificate(domain: string): Promise<void> {
+  const paths = getPaths();
+  const certPath = path.join(paths.certs, `${domain}.crt`);
+  const keyPath = path.join(paths.certs, `${domain}.key`);
+  if (existsSync(certPath) && existsSync(keyPath)) {
+    return;
+  }
+
+  await issueCertificate(domain);
 }
 
 export async function getLocalCaStatus(): Promise<SslTrustStatus> {
@@ -120,7 +135,7 @@ export async function trustLocalCa({ wait = false }: { wait?: boolean } = {}): P
   return getLocalCaStatus();
 }
 
-async function ensureCertificate(domain: string): Promise<void> {
+async function issueCertificate(domain: string): Promise<void> {
   const paths = getPaths();
   await mkdir(paths.certs, { recursive: true });
   const ca = await ensureLocalCa();
@@ -150,6 +165,18 @@ async function ensureCertificate(domain: string): Promise<void> {
   await writeFile(path.join(paths.certs, `${domain}.crt`), certificate.cert, "utf8");
   await writeFile(path.join(paths.certs, `${domain}.key`), certificate.private, "utf8");
   await appendLog("ssl", `issued trusted local certificate for ${domain}`);
+}
+
+async function updateSiteAppUrl(sitePath: string, domain: string, secured: boolean): Promise<void> {
+  const envPath = path.join(sitePath, ".env");
+  if (!existsSync(envPath)) {
+    return;
+  }
+
+  await updateDotEnvFile(envPath, {
+    APP_URL: `${secured ? "https" : "http"}://${domain}`
+  });
+  await appendLog("ssl", `updated ${domain} APP_URL for ${secured ? "https" : "http"}`);
 }
 
 async function ensureLocalCa(): Promise<{ cert: string; key: string }> {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getPaths } from "../src/core/paths.js";
-import { getLocalCaStatus, secureSite } from "../src/core/ssl.js";
+import { getLocalCaStatus, secureSite, unsecureSite } from "../src/core/ssl.js";
 import { addParkedFolder } from "../src/core/sites.js";
 
 describe("SSL certificates", () => {
@@ -14,6 +14,7 @@ describe("SSL certificates", () => {
     const parked = path.join(process.env.LARABOXS_HOME, "www");
     await mkdir(path.join(parked, "dispatches", "public"), { recursive: true });
     await writeFile(path.join(parked, "dispatches", "public", "index.php"), "<?php");
+    await writeFile(path.join(parked, "dispatches", ".env"), "APP_URL=http://dispatches.test\n");
     await addParkedFolder(parked);
   });
 
@@ -39,5 +40,15 @@ describe("SSL certificates", () => {
     expect(status.trusted).toBe(false);
     expect(status.certPath).toContain("laraboxs-local-ca.crt");
     expect(status.message).toBe("CA trust check skipped.");
+  });
+
+  it("updates Laravel APP_URL when a site is secured or unsecured", async () => {
+    const envPath = path.join(process.env.LARABOXS_HOME ?? "", "www", "dispatches", ".env");
+
+    await secureSite("dispatches.test");
+    expect(await readFile(envPath, "utf8")).toContain("APP_URL=https://dispatches.test");
+
+    await unsecureSite("dispatches.test");
+    expect(await readFile(envPath, "utf8")).toContain("APP_URL=http://dispatches.test");
   });
 });

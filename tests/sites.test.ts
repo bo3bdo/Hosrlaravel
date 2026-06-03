@@ -2,7 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildLaravelNewArgs, createNewSite } from "../src/core/laravelInstaller.js";
+import { mergeDotEnvContent } from "../src/core/envFile.js";
+import { applyLocalDevelopmentInstallEnvironment, buildLaravelNewArgs, createNewSite } from "../src/core/laravelInstaller.js";
 import { addParkedFolder, discoverSites, isolateSite, setGlobalPhpVersion, setSiteEntryPath } from "../src/core/sites.js";
 
 describe("site discovery", () => {
@@ -82,6 +83,7 @@ describe("site discovery", () => {
       "my-app",
       "--no-interaction",
       "--no-ansi",
+      "--verbose",
       "--database=mariadb",
       "--react",
       "--no-authentication",
@@ -90,5 +92,36 @@ describe("site discovery", () => {
       "--no-boost",
       "--git"
     ]);
+  });
+
+  it("forces local project installs to include development dependencies", () => {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "production",
+      npm_config_omit: "dev",
+      NPM_CONFIG_ONLY: "prod",
+      COMPOSER_NO_DEV: "1"
+    };
+
+    applyLocalDevelopmentInstallEnvironment(env);
+
+    expect(env.NODE_ENV).toBe("development");
+    expect(env.npm_config_production).toBe("false");
+    expect(env.npm_config_include).toBe("dev");
+    expect(env.npm_config_omit).toBeUndefined();
+    expect(env.NPM_CONFIG_ONLY).toBeUndefined();
+    expect(env.COMPOSER_NO_DEV).toBeUndefined();
+  });
+
+  it("updates Laravel env files without duplicating keys", () => {
+    const next = mergeDotEnvContent("APP_NAME=Laravel\nAPP_URL=http://localhost:8000\nDB_PASSWORD=\n", {
+      APP_URL: "http://kk.test",
+      DB_PASSWORD: "secret",
+      DB_DATABASE: "kk"
+    });
+
+    expect(next).toContain("APP_URL=http://kk.test\n");
+    expect(next).toContain("DB_PASSWORD=secret\n");
+    expect(next).toContain("DB_DATABASE=kk\n");
+    expect(next.match(/^APP_URL=/gm)).toHaveLength(1);
   });
 });
