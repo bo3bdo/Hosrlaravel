@@ -292,6 +292,37 @@ fn wait_for_helper_api_to_stop() {
     }
 }
 
+fn request_helper_api_shutdown() -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], API_PORT));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let request = format!(
+        "POST /api/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        API_PORT
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 256];
+    let _ = stream.read(&mut response);
+    true
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => thread::sleep(Duration::from_millis(200)),
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 fn normalize_for_compare(value: &str) -> String {
     value
         .replace("\\\\?\\UNC\\", "\\\\")
@@ -337,9 +368,14 @@ fn stop_helper_api(app_handle: &tauri::AppHandle) {
     };
 
     if let Some(mut child) = child {
+        if request_helper_api_shutdown() && wait_for_child_exit(&mut child, Duration::from_secs(12)) {
+            log_helper_api("helper API stopped gracefully");
+            return;
+        }
+
         let _ = child.kill();
         let _ = child.wait();
-        log_helper_api("helper API stopped");
+        log_helper_api("helper API force-stopped");
     }
 }
 

@@ -9,6 +9,7 @@ import { syncHostsFile } from "../core/hosts.js";
 import {
   findAvailableMysqlPort,
   getMysqlRootPassword,
+  getMysqlStatus,
   ensureMysqlConfigured,
   initializeMysqlDataDir,
   laravelEnv,
@@ -22,6 +23,7 @@ import {
   setMysqlVersion
 } from "../core/mysql.js";
 import { getNginxStatus, runNginx, updateNginxSettings, writeNginxConfigs } from "../core/nginx.js";
+import { appendLog } from "../core/logging.js";
 import { ensurePhpIni, getPhpFastCgiStatus, getPhpSettings, runPhpFastCgi, updatePhpSettings } from "../core/php.js";
 import { getPhpMyAdminStatus, installPhpMyAdmin, writePhpMyAdminConfig } from "../core/phpmyadmin.js";
 import { findAvailableRedisPort, openRedisCli, runRedis, setRedisPort } from "../core/redis.js";
@@ -29,6 +31,7 @@ import { ensureDeveloperCommandPath, uninstallRuntime } from "../core/runtimes.j
 import { getRuntimeInstallJob, listRuntimeInstallJobs, startRuntimeInstallJob } from "./runtimeJobs.js";
 import { selectFolder } from "./dialogs.js";
 import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
+import { tryEnsureWindowsDefenderExclusion } from "../core/defender.js";
 import { getDashboardSummary } from "../core/summary.js";
 import { readSitePreviewImage } from "../core/sitePreview.js";
 import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
@@ -69,6 +72,12 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/health.txt") {
       response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
       response.end(["laraboxs-helper", projectRoot, String(process.pid)].join("\n"));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/shutdown") {
+      await sendJson(response, { ok: true, message: "Shutdown requested." });
+      setTimeout(() => void gracefulShutdown("API shutdown"), 50);
       return;
     }
 
@@ -411,6 +420,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/defender/exclude") {
+      const body = await readJson(request);
+      const targetPath = assertString(body.path, "path");
+      const status = await tryEnsureWindowsDefenderExclusion(targetPath);
+      await sendJson(response, { ok: status.excluded, status });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/runtimes/jobs") {
       await sendJson(response, { jobs: listRuntimeInstallJobs() });
       return;
@@ -518,6 +535,68 @@ server.listen(port, host, () => {
   console.log(`laraboxs helper API listening on http://${host}:${port}`);
   void ensureDeveloperCommandPath();
 });
+
+const shutdownTasks: Array<() => Promise<void> | void> = [];
+let shuttingDown = false;
+
+export function registerShutdownTask(task: () => Promise<void> | void): void {
+  shutdownTasks.push(task);
+}
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}. Stopping services...`);
+
+  try {
+    if (getNginxStatus().state === "running") {
+      console.log("Stopping Nginx...");
+      await runNginx("stop");
+    }
+  } catch {
+    // Ignore errors during shutdown.
+  }
+
+  try {
+    if ((await getPhpFastCgiStatus()).state === "running") {
+      console.log("Stopping PHP FastCGI...");
+      await runPhpFastCgi("stop");
+    }
+  } catch {
+    // Ignore errors during shutdown.
+  }
+
+  try {
+    if ((await getMysqlStatus()).state === "running") {
+      console.log("Stopping MySQL...");
+      await runMysql("stop");
+    }
+  } catch {
+    // Ignore errors during shutdown.
+  }
+
+  await Promise.all(shutdownTasks.map(async (task) => { try { await task(); } catch { /* noop */ } }));
+  server.closeAllConnections?.();
+  server.close(() => {
+    console.log("Server closed.");
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error("Forced exit after shutdown timeout.");
+    process.exit(1);
+  }, 8000);
+}
+
+function setupGracefulShutdown(): void {
+  process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+  process.on("exit", () => {
+    console.log("laraboxs helper API exited.");
+  });
+}
+
+setupGracefulShutdown();
 
 async function sendJson(response: http.ServerResponse, value: unknown): Promise<void> {
   response.writeHead(200, { "Content-Type": "application/json" });
@@ -713,7 +792,9 @@ function assertPhpSettings(value: unknown) {
     postMaxSize: optionalString(input.postMaxSize),
     maxExecutionTime: optionalNumber(input.maxExecutionTime),
     maxInputVars: optionalNumber(input.maxInputVars),
-    enabledExtensions: optionalStringArray(input.enabledExtensions)
+    enabledExtensions: optionalStringArray(input.enabledExtensions),
+    xdebugEnabled: typeof input.xdebugEnabled === "boolean" ? input.xdebugEnabled : undefined,
+    xdebugIdeKey: typeof input.xdebugIdeKey === "string" ? input.xdebugIdeKey : undefined
   };
 }
 

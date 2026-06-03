@@ -5,6 +5,7 @@ import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { loadConfig, updateConfig } from "./config.js";
+import { checkPortConflict } from "./ports.js";
 import { appendLog } from "./logging.js";
 import { getPaths, mysqlDataForVersion, mysqlRootForVersion, toNginxPath } from "./paths.js";
 import { ensureSecret, readSecret, saveSecret } from "./secretStore.js";
@@ -203,6 +204,15 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
     const initialized = await ensureMysqlInitializedForStart();
     if (initialized && initialized.state === "unknown") {
       return initialized;
+    }
+
+    const config = await loadConfig();
+    const conflict = await checkPortConflict(config.mysql.port);
+    if (conflict.inUse) {
+      const occupant = conflict.processName ? ` (used by ${conflict.processName})` : "";
+      const msg = `MySQL port ${config.mysql.port} is already in use${occupant}. Stop the other process or change the MySQL port in Settings.`;
+      await appendLog("mysql", msg);
+      return { name: "mysql", state: "unknown", version: config.mysql.version, port: config.mysql.port, message: msg };
     }
   }
 

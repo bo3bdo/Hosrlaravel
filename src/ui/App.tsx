@@ -24,6 +24,7 @@ import {
   Play,
   RotateCw,
   Save,
+  Search,
   Server,
   Settings,
   Shield,
@@ -53,6 +54,8 @@ import type {
   Site,
   SiteCreationResult
 } from "./types.js";
+import { ToastContainer } from "./components/ToastContainer.js";
+import { useToasts, showToast } from "./components/useToasts.js";
 
 type Section = "sites" | "services" | "logs" | "settings";
 type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
@@ -76,7 +79,16 @@ const sections: Array<{ id: Section; label: string; icon: typeof Globe }> = [
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
-function apiUrl(path: string): string {
+function serviceBadgeForSection(sectionId: Section, summary: DashboardSummary): JSX.Element | null {
+  if (sectionId === "services") {
+    const runningServices = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter(
+      (service) => service.state === "running"
+    ).length;
+    const tone = runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red";
+    return <span className={`status-dot ${tone}`} title={`${runningServices}/4 services running`} />;
+  }
+  return null;
+} function apiUrl(path: string): string {
   if (/^https?:\/\//.test(path)) {
     return path;
   }
@@ -131,6 +143,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installJobs, setInstallJobs] = useState<RuntimeJobMap>({});
+  const { toasts, addToast, removeToast } = useToasts();
 
   async function refresh() {
     try {
@@ -160,7 +173,9 @@ export default function App() {
       setError(null);
       return payload.job;
     } catch (requestError) {
-      setError(`Action failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+      const message = requestError instanceof Error ? requestError.message : String(requestError);
+      setError(`Action failed: ${message}`);
+      addToast(message, "error");
       return undefined;
     }
   }
@@ -183,7 +198,9 @@ export default function App() {
       setError(null);
       return payload as unknown;
     } catch (requestError) {
-      setError(`Action failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+      const message = requestError instanceof Error ? requestError.message : String(requestError);
+      setError(`Action failed: ${message}`);
+      addToast(message, "error");
       throw requestError;
     } finally {
       setBusy(false);
@@ -283,10 +300,12 @@ export default function App() {
         <nav>
           {sections.map((item) => {
             const Icon = item.icon;
+            const badge = summary ? serviceBadgeForSection(item.id, summary) : null;
             return (
               <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}>
                 <Icon size={18} />
                 <span>{item.label}</span>
+                {badge ?? null}
               </button>
             );
           })}
@@ -320,6 +339,8 @@ export default function App() {
           </section>
         )}
       </main>
+
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
     </div>
   );
 }
@@ -943,7 +964,11 @@ function Services({
   const [rootPassword, setRootPassword] = useState("");
   const [showRootPassword, setShowRootPassword] = useState(false);
   const [newRootPassword, setNewRootPassword] = useState("");
-  const [phpSettings, setPhpSettings] = useState<PhpConfig>(summary.config.php);
+  const [phpSettings, setPhpSettings] = useState<PhpConfig>({
+    ...summary.config.php,
+    xdebugEnabled: summary.config.php.xdebugEnabled ?? false,
+    xdebugIdeKey: summary.config.php.xdebugIdeKey ?? "PHPSTORM"
+  });
   const [phpExtensions, setPhpExtensions] = useState<PhpExtensionStatus[]>([]);
   const [phpIniPath, setPhpIniPath] = useState("");
   const [phpSettingsLoading, setPhpSettingsLoading] = useState(false);
@@ -1217,6 +1242,29 @@ function Services({
             ) : (
               <span className="muted">{phpSettingsLoading ? "Loading extensions..." : "No extensions found."}</span>
             )}
+          </div>
+          <div className="xdebug-panel" style={{ borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+            <label className="compact-toggle">
+              <input
+                type="checkbox"
+                checked={phpSettings.xdebugEnabled}
+                disabled={phpSettingsSaving || phpSettingsLoading}
+                onChange={() => {
+                  setPhpSettings((current) => ({ ...current, xdebugEnabled: !current.xdebugEnabled }));
+                }}
+              />
+              <span>Enable Xdebug</span>
+            </label>
+            <label style={{ display: "grid", gap: 4, marginTop: 6 }}>
+              <span style={{ color: "var(--muted)", fontSize: 11, fontWeight: 800, textTransform: "uppercase" }}>Xdebug IDE key</span>
+              <input
+                value={phpSettings.xdebugIdeKey}
+                disabled={!phpSettings.xdebugEnabled || phpSettingsSaving || phpSettingsLoading}
+                onChange={(event) => {
+                  setPhpSettings((current) => ({ ...current, xdebugIdeKey: event.target.value }));
+                }}
+              />
+            </label>
           </div>
         </div>
         ) : null}
@@ -1748,9 +1796,21 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
   const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
   const [siteTab, setSiteTab] = useState<"general" | "information">("general");
   const [newSiteOpen, setNewSiteOpen] = useState(false);
+  const [siteSearch, setSiteSearch] = useState("");
   const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
   const [entryPath, setEntryPath] = useState(selectedSite?.entryPath ?? ".");
   const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
+
+  const filteredSites = summary.sites.filter((site) => {
+    const query = siteSearch.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      site.name.toLowerCase().includes(query) ||
+      site.domain.toLowerCase().includes(query) ||
+      site.path.toLowerCase().includes(query) ||
+      site.framework.toLowerCase().includes(query)
+    );
+  });
 
   async function browseFolder() {
     const payload = (await request("/api/dialog/folder", { initialPath: folder })) as { path?: string | null };
@@ -1840,16 +1900,27 @@ function Sites({ summary, post, request, busy }: ViewProps & { request: (path: s
         <div className="sites-workbench">
           <aside className="sites-list-pane">
             <div className="sites-list-header">
-              <strong>Sites</strong>
-              <span>{summary.sites.length}</span>
+              <div className="toolbar" style={{ width: "100%", flexWrap: "nowrap" }}>
+                <Search size={14} style={{ color: "var(--muted)", flex: "0 0 auto" }} />
+                <input
+                  placeholder="Search sites..."
+                  value={siteSearch}
+                  onChange={(event) => setSiteSearch(event.target.value)}
+                  style={{ flex: "1 1 auto", minWidth: 0 }}
+                />
+                <span style={{ color: "var(--muted)", fontSize: 12, flex: "0 0 auto" }}>{filteredSites.length}</span>
+              </div>
             </div>
             <div className="sites-list">
-              {summary.sites.map((site) => (
+              {filteredSites.map((site) => (
                 <button key={site.domain} className={site.domain === selectedSite.domain ? "site-list-item active" : "site-list-item"} onClick={() => setSelectedDomain(site.domain)} title={`${site.domain} - ${site.framework}`}>
                   <span>{site.domain}</span>
                   <small>{site.framework}</small>
                 </button>
               ))}
+              {filteredSites.length === 0 && summary.sites.length > 0 ? (
+                <div className="settings-empty-row" style={{ margin: 4 }}><span>No sites match search.</span></div>
+              ) : null}
             </div>
           </aside>
 
@@ -3673,7 +3744,52 @@ function SettingsView({
             ))}
           </div>
         </section>
+
+        <section className="settings-panel wide-settings-panel">
+          <SettingsPanelHeader icon={Shield} title="Windows Defender" detail="Add exclusions to avoid scanning app data" />
+          <div className="settings-action-grid">
+            <DefenderExclusionTile
+              label="Sites folder"
+              path={summary.config.parkedFolders[0] ?? ""}
+              onAdd={async () => {
+                const payload = (await request("/api/defender/exclude", { path: summary.config.parkedFolders[0] })) as { ok?: boolean; excluded?: boolean };
+                if (payload.ok) {
+                  showToast("Sites folder excluded from Windows Defender.", "success");
+                } else {
+                  showToast("Could not exclude sites folder.", "error");
+                }
+              }}
+            />
+            <DefenderExclusionTile
+              label="App data"
+              path={summary.paths.home}
+              onAdd={async () => {
+                const payload = (await request("/api/defender/exclude", { path: summary.paths.home })) as { ok?: boolean; excluded?: boolean };
+                if (payload.ok) {
+                  showToast("App data excluded from Windows Defender.", "success");
+                } else {
+                  showToast("Could not exclude app data.", "error");
+                }
+              }}
+            />
+          </div>
+        </section>
       </div>
+    </div>
+  );
+}
+
+function DefenderExclusionTile({ label, path, onAdd }: { label: string; path: string; onAdd: () => void }) {
+  return (
+    <div className="settings-action-tile">
+      <Shield size={18} />
+      <div>
+        <strong>{label}</strong>
+        <span>{path}</span>
+      </div>
+      <button onClick={() => void onAdd()} disabled={!path}>
+        <ShieldCheck size={16} />
+      </button>
     </div>
   );
 }

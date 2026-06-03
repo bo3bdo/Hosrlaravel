@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { checkPortConflict } from "./ports.js";
 import { loadConfig, updateConfig } from "./config.js";
 import { appendLog } from "./logging.js";
 import { getPaths, redisDataForVersion, redisRootForVersion, toNginxPath } from "./paths.js";
@@ -115,6 +116,15 @@ export async function runRedis(action: ServiceAction): Promise<ServiceStatus> {
   }
 
   if (action === "start") {
+    const config = await loadConfig();
+    const conflict = await checkPortConflict(config.redis.port);
+    if (conflict.inUse) {
+      const occupant = conflict.processName ? ` (used by ${conflict.processName})` : "";
+      const msg = `Redis port ${config.redis.port} is already in use${occupant}. Stop the other process or change the Redis port in Settings.`;
+      await appendLog("redis", msg);
+      return { name: "redis", state: "unknown", version: config.redis.version, port: config.redis.port, logPath: redisLogPath(), message: msg };
+    }
+
     const command = await buildRedisCommand("start");
     if (!existsSync(command.command)) {
       const config = await loadConfig();

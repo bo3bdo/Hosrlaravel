@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { ensureBaseDirs, getPaths } from "./paths.js";
@@ -66,7 +66,9 @@ export function defaultConfig(): LaraboxsConfig {
       postMaxSize: "64M",
       maxExecutionTime: 60,
       maxInputVars: 3000,
-      enabledExtensions: defaultPhpExtensions
+      enabledExtensions: defaultPhpExtensions,
+      xdebugEnabled: false,
+      xdebugIdeKey: "PHPSTORM"
     },
     nginx: {
       httpPort: 80,
@@ -104,6 +106,7 @@ export async function loadConfig(): Promise<LaraboxsConfig> {
 export async function saveConfig(config: LaraboxsConfig): Promise<void> {
   const paths = await ensureBaseDirs();
   const normalized = normalizeConfig(config);
+  await backupConfigFile(paths.configFile);
   await writeFile(paths.configFile, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
 }
 
@@ -140,7 +143,9 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
       postMaxSize: inputPhp.postMaxSize ?? defaults.php.postMaxSize,
       maxExecutionTime: inputPhp.maxExecutionTime ?? defaults.php.maxExecutionTime,
       maxInputVars: inputPhp.maxInputVars ?? defaults.php.maxInputVars,
-      enabledExtensions: normalizeExtensionList(enabledExtensionsWithDefaults(inputPhp.enabledExtensions))
+      enabledExtensions: normalizeExtensionList(enabledExtensionsWithDefaults(inputPhp.enabledExtensions)),
+      xdebugEnabled: inputPhp.xdebugEnabled ?? defaults.php.xdebugEnabled,
+      xdebugIdeKey: inputPhp.xdebugIdeKey ?? defaults.php.xdebugIdeKey
     },
     nginx: {
       ...defaults.nginx,
@@ -155,6 +160,54 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
       ...(input.redis ?? {})
     }
   };
+}
+
+async function backupConfigFile(configFilePath: string): Promise<void> {
+  if (!existsSync(configFilePath)) {
+    return;
+  }
+  try {
+    const backupDir = path.join(path.dirname(configFilePath), "backups");
+    await import("node:fs/promises").then((mod) => mod.mkdir(backupDir, { recursive: true }));
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = path.join(backupDir, `config.json.${timestamp}.bak`);
+    const current = await readFile(configFilePath, "utf8");
+    await writeFile(backupPath, current, "utf8");
+    await pruneConfigBackups(backupDir, 20);
+  } catch {
+    // Non-critical: continue saving even if backup fails.
+  }
+}
+
+async function pruneConfigBackups(backupDir: string, limit: number): Promise<void> {
+  try {
+    const { readdir, unlink } = await import("node:fs/promises");
+    const entries = await readdir(backupDir);
+    const files = entries.filter((entry) => entry.endsWith(".bak"));
+    if (files.length <= limit) return;
+
+    const stats = await Promise.all(
+      files.map(async (name) => {
+        try {
+          return { name, s: await stat(path.join(backupDir, name)) };
+        } catch {
+          return { name, s: null };
+        }
+      })
+    );
+
+    const sorted = stats.sort((a, b) => {
+      if (!a.s || !b.s) return 0;
+      return b.s.mtime.getTime() - a.s.mtime.getTime();
+    });
+
+    const toRemove = sorted.slice(limit);
+    for (const file of toRemove) {
+      await unlink(path.join(backupDir, file.name)).catch(() => undefined);
+    }
+  } catch {
+    // Ignore pruning errors.
+  }
 }
 
 function normalizeExtensionList(extensions: string[]): string[] {

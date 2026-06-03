@@ -35,6 +35,8 @@ export interface PhpConfig {
   maxExecutionTime: number;
   maxInputVars: number;
   enabledExtensions: string[];
+  xdebugEnabled: boolean;
+  xdebugIdeKey: string;
 }
 
 export interface PhpExtensionStatus {

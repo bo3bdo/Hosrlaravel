@@ -2869,3 +2869,147 @@ tr:last-child td {
     text-align: left;
   }
 }
+
+/* Toast notifications */
+.toast-stack {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  display: grid;
+  gap: 6px;
+  max-width: min(420px, calc(100vw - 20px));
+}
+
+.toast {
+  min-height: 38px;
+  border: 1px solid;
+  border-radius: 5px;
+  background: #12171c;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  animation: toastIn 180ms ease;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-10px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.toast-success {
+  border-color: #1f6b54;
+  color: #6dd89f;
+}
+
+.toast-error {
+  border-color: #8b2d33;
+  color: #ff7878;
+}
+
+.toast-info {
+  border-color: #2d3741;
+  color: #edf3f7;
+}
+
+.toast button {
+  width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.toast button:hover {
+  opacity: 1;
+}
+
+/* Responsive sidebar */
+@media (max-width: 860px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 44px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #1e262d;
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+  }
+
+  .sidebar .brand {
+    margin-bottom: 0;
+    margin-right: 6px;
+    flex: 0 0 auto;
+  }
+
+  .sidebar .brand span {
+    display: none;
+  }
+
+  .sidebar nav {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+  }
+
+  .sidebar nav button {
+    width: auto;
+  }
+
+  .topbar h1 {
+    font-size: 15px;
+  }
+
+  .services-overview,
+  .settings-overview,
+  .settings-grid,
+  .settings-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .services-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .services-list {
+    position: relative;
+    top: auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .services-list .service-nav-item {
+    width: auto;
+    min-height: 36px;
+  }
+
+  .service-nav-item div {
+    display: none;
+  }
+
+  .service-nav-item .status-dot {
+    display: block;
+  }
+
+  .sites-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .site-general-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

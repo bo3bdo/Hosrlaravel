@@ -201,6 +201,22 @@ export async function ensurePhpIni(version: string): Promise<string> {
   const extensions = config.php.enabledExtensions.filter((extension) => Boolean(available.get(extension)?.dll));
   const builtInExtensions = config.php.enabledExtensions.filter((extension) => available.get(extension)?.builtIn && !available.get(extension)?.dll);
   const unavailableExtensions = config.php.enabledExtensions.filter((extension) => !available.has(extension));
+  const xdebugLines: string[] = [];
+  if (config.php.xdebugEnabled && available.has("xdebug")) {
+    const ideKey = config.php.xdebugIdeKey || "PHPSTORM";
+    xdebugLines.push(
+      "",
+      "; Xdebug (enabled via laraboxs UI/CLI)",
+      "zend_extension=xdebug",
+      "xdebug.mode=debug",
+      `xdebug.idekey=${ideKey}`,
+      "xdebug.client_host=127.0.0.1",
+      "xdebug.client_port=9003",
+      "xdebug.start_with_request=trigger"
+    );
+  } else if (config.php.xdebugEnabled) {
+    xdebugLines.push("", "; Xdebug requested but php_xdebug.dll was not found in this PHP version's ext folder.");
+  }
   const ini = [
     generatedPhpIniHeader,
     `extension_dir="${toPhpIniPath(extDir)}"`,
@@ -218,6 +234,7 @@ export async function ensurePhpIni(version: string): Promise<string> {
     ...extensions.map((extension) => `extension=${extension}`),
     ...builtInExtensions.map((extension) => `; extension=${extension} is built into this PHP version.`),
     ...unavailableExtensions.map((extension) => `; extension=${extension} skipped by laraboxs: php_${extension}.dll was not found in this PHP version's ext folder.`),
+    ...xdebugLines,
     ""
   ].join("\n");
 
@@ -302,6 +319,16 @@ function validatePhpSettingsPatch(settings: Partial<PhpConfig>): Partial<PhpConf
         })
       )
     ).sort();
+  }
+  if (settings.xdebugEnabled !== undefined) {
+    patch.xdebugEnabled = Boolean(settings.xdebugEnabled);
+  }
+  if (settings.xdebugIdeKey !== undefined) {
+    const ideKey = settings.xdebugIdeKey.trim();
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(ideKey)) {
+      throw new Error("xdebug.idekey may contain only letters, numbers, dots, underscores, and hyphens.");
+    }
+    patch.xdebugIdeKey = ideKey;
   }
 
   return patch;

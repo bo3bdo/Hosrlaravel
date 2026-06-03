@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { loadConfig, updateConfig } from "./config.js";
 import { appendLog } from "./logging.js";
 import { getPaths, toNginxPath } from "./paths.js";
+import { checkPortConflict } from "./ports.js";
 import { ensurePhpFastCgiWorkers, phpFastCgiPort } from "./php.js";
 import { generatePhpMyAdminNginxConfig } from "./phpmyadmin.js";
 import { discoverSites } from "./sites.js";
@@ -192,6 +193,21 @@ export async function runNginx(action: ServiceAction): Promise<ServiceStatus> {
   }
 
   if (action === "start" || action === "restart") {
+    const config = await loadConfig();
+    const httpConflict = await checkPortConflict(config.nginx.httpPort);
+    if (httpConflict.inUse) {
+      const occupant = httpConflict.processName ? ` (used by ${httpConflict.processName})` : "";
+      const message = `HTTP port ${config.nginx.httpPort} is already in use${occupant}. Stop the other process or change the HTTP port in Settings.`;
+      await appendLog("nginx", message);
+      return { name: "nginx", state: "unknown", logPath: path.join(getPaths().logs, "nginx-error.log"), message };
+    }
+    const httpsConflict = await checkPortConflict(config.nginx.httpsPort);
+    if (httpsConflict.inUse) {
+      const occupant = httpsConflict.processName ? ` (used by ${httpsConflict.processName})` : "";
+      const message = `HTTPS port ${config.nginx.httpsPort} is already in use${occupant}. Stop the other process or change the HTTPS port in Settings.`;
+      await appendLog("nginx", message);
+      return { name: "nginx", state: "unknown", logPath: path.join(getPaths().logs, "nginx-error.log"), message };
+    }
     await ensurePhpFastCgiWorkers();
   }
 

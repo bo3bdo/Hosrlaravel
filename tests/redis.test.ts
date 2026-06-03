@@ -2,11 +2,15 @@ import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { updateConfig } from "../src/core/config.js";
 import { buildRedisCommand, generateRedisConfig, redisBinaryPath, redisCliCommand, redisCliLauncherCommand, setRedisPort } from "../src/core/redis.js";
 
 describe("redis command logic", () => {
   beforeEach(async () => {
     process.env.LARABOXS_HOME = await mkdir(path.join(os.tmpdir(), `laraboxs-redis-${Date.now()}-`), { recursive: true });
+    await updateConfig((config) => {
+      config.redis.port = 46379;
+    });
   });
 
   it("generates a localhost-only Redis config", async () => {

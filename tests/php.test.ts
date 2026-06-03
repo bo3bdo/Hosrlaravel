@@ -81,4 +81,24 @@ describe("php settings", () => {
     expect(settings.extensions.find((extension) => extension.name === "imagick")?.available).toBe(false);
     expect(settings.extensions.find((extension) => extension.name === "imagick")?.enabled).toBe(true);
   });
+
+  it("saves Xdebug settings and writes Xdebug ini directives when available", async () => {
+    const extDir = path.join(getPaths().phpRoot, "8.4", "ext");
+    await mkdir(extDir, { recursive: true });
+    await writeFile(path.join(extDir, "php_xdebug.dll"), "fake xdebug extension", "utf8");
+
+    await updatePhpSettings({
+      xdebugEnabled: true,
+      xdebugIdeKey: "VSCODE"
+    });
+
+    const ini = await readFile(await ensurePhpIni("8.4"), "utf8");
+    const settings = await getPhpSettings("8.4");
+
+    expect(settings.settings.xdebugEnabled).toBe(true);
+    expect(settings.settings.xdebugIdeKey).toBe("VSCODE");
+    expect(ini).toContain("zend_extension=xdebug");
+    expect(ini).toContain("xdebug.idekey=VSCODE");
+    expect(ini).toContain("xdebug.client_port=9003");
+  });
 });
