@@ -10,15 +10,44 @@ Repository: [github.com/bo3bdo/Hosrlaravel](https://github.com/bo3bdo/Hosrlarave
 
 ## Screenshots
 
-Documentation images use generic example paths and domains (`example.test`, `C:\dev\www`, `%USERPROFILE%\.config\laraboxs`). They are illustrative placeholders for the public README.
+<p align="center">
+  <img src="docs/screenshots/1.jpg" alt="laraboxs dashboard with stack health, services, and logs" width="920" />
+</p>
 
-| Site entry | Nginx | PHP |
-| --- | --- | --- |
-| ![Site entry settings](docs/screenshots/site-entry-settings.png) | ![Nginx settings](docs/screenshots/nginx-settings.png) | ![PHP settings](docs/screenshots/php-settings.png) |
+<p align="center"><strong>Dashboard</strong> — Health checks, running services, and recent warnings.</p>
 
-| First-run setup | Site preview |
-| --- | --- |
-| ![First-run install](docs/screenshots/first-run-install.png) | ![Site preview](docs/screenshots/site-preview.png) |
+<p align="center">
+  <img src="docs/screenshots/2.jpg" alt="laraboxs sites list with preview and SSL controls" width="920" />
+</p>
+
+<p align="center"><strong>Sites</strong> — Parked folders, per-site preview, PHP version, and Nginx entry paths.</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/3.jpg" alt="laraboxs PHP service settings and extensions" width="440" /><br />
+      <strong>Services · PHP</strong><br />
+      Version switching, <code>php.ini</code>, and extensions
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/4.jpg" alt="laraboxs tools and port conflict checks" width="440" /><br />
+      <strong>Tools</strong><br />
+      Port checks and runtime status
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/5.jpg" alt="laraboxs unified runtime logs" width="440" /><br />
+      <strong>Logs</strong><br />
+      Filtered service output for troubleshooting
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/6.jpg" alt="laraboxs workspace and startup settings" width="440" /><br />
+      <strong>Settings</strong><br />
+      TLD, PHP, database engine, and startup behavior
+    </td>
+  </tr>
+</table>
 
 ## Features
 
@@ -104,7 +133,7 @@ src/api       Localhost helper API used by the dashboard.
 src/cli       Command-line interface.
 src/ui        React dashboard.
 src-tauri     Tauri v2 desktop wrapper scaffold.
-scripts       Windows packaging, helper-service, and doc screenshot scripts.
+scripts       Windows packaging and helper-service scripts.
 tests         Vitest test suite.
 docs          Usage, architecture, development notes, and screenshots.
 ```
@@ -128,12 +157,6 @@ npm run dev
 
 The Vite dev server proxies `/api` calls to the helper API on `127.0.0.1:47899`. Production mode builds the dashboard into `dist-ui` and serves both the API and dashboard from the helper process.
 
-Regenerate sanitized README screenshots after UI changes:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/generate-docs-screenshots.ps1
-```
-
 Read [docs/development.md](docs/development.md) for contribution workflow, test strategy, architecture rules, and release preparation.
 
 ## Documentation
@@ -148,7 +171,7 @@ Read [docs/development.md](docs/development.md) for contribution workflow, test 
 
 laraboxs is original open-source software under the [MIT License](LICENSE). Contributions are welcome through issues and pull requests. Please follow [CONTRIBUTING.md](CONTRIBUTING.md) and report security issues privately as described in [SECURITY.md](SECURITY.md).
 
-Do not commit local secrets, `.env` files, runtime downloads, or personal screenshots. App data and passwords stay under `%USERPROFILE%\.config\laraboxs` on your machine.
+Do not commit local secrets, `.env` files, runtime downloads, or screenshots that show passwords or API keys. App data and passwords stay under `%USERPROFILE%\.config\laraboxs` on your machine.
 
 ## Current Status
 
