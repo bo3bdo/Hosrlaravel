@@ -13,6 +13,8 @@
     "cli": "tsx src/cli/index.ts",
     "cli:watch": "tsx watch src/cli/index.ts",
     "dev": "vite --host 127.0.0.1",
+    "dev:tauri-prep": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-laraboxs-dev.ps1",
+    "dev:tauri": "npm run dev:tauri-prep && npm run dev",
     "helper:install": "powershell -ExecutionPolicy Bypass -File scripts/install-helper-service.ps1",
     "helper:status": "powershell -ExecutionPolicy Bypass -File scripts/helper-service-status.ps1",
     "helper:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-helper-service.ps1",
@@ -20,6 +22,7 @@
     "package:tauri-resources": "powershell -ExecutionPolicy Bypass -File scripts/prepare-tauri-resources.ps1",
     "start": "node dist/api/server.js",
     "tauri": "tauri",
+    "tauri:dev": "npm run dev:tauri-prep && tauri dev",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.app.json"
   },

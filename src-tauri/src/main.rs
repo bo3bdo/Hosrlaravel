@@ -34,7 +34,18 @@ struct AppExit(AtomicBool);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args_request_hidden(&args) {
+                show_main_window(app);
+            }
+        }));
+    }
+
+    builder
         .setup(|app| {
             let child = start_helper_api(app.path().resource_dir()?);
             app.manage(ApiProcess(Mutex::new(child?)));
@@ -144,7 +155,7 @@ fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std:
     };
 
     let app_dir = normalize_windows_path(resource_dir.join("app"));
-    let node = normalize_windows_path(resource_dir.join("node.exe"));
+    let node = helper_node_executable(&resource_dir);
     let server = app_dir.join("dist").join("api").join("server.js");
 
     if helper_api_owned_by(&app_dir) {
@@ -207,7 +218,7 @@ fn helper_resource_dir(resource_dir: PathBuf) -> Option<PathBuf> {
     }
 
     for candidate in candidates {
-        let node = candidate.join("node.exe");
+        let node = helper_node_executable(&candidate);
         let server = candidate.join("app").join("dist").join("api").join("server.js");
         log_helper_api(format!(
             "checking helper API resources at {}: node_exists={}, server_exists={}",
@@ -221,6 +232,45 @@ fn helper_resource_dir(resource_dir: PathBuf) -> Option<PathBuf> {
     }
 
     None
+}
+
+fn helper_node_executable(resource_dir: &PathBuf) -> PathBuf {
+    #[cfg(debug_assertions)]
+    {
+        if let Some(path) = env::var_os("LARABOXS_NODE") {
+            let configured = PathBuf::from(path);
+            if configured.is_file() {
+                return normalize_windows_path(configured);
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("where.exe");
+            command
+                .arg("node")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            command.creation_flags(CREATE_NO_WINDOW);
+            if let Ok(output) = command.output()
+            {
+                if output.status.success() {
+                    if let Ok(stdout) = String::from_utf8(output.stdout) {
+                        if let Some(first) = stdout.lines().map(str::trim).find(|line| !line.is_empty()) {
+                            let system_node = PathBuf::from(first);
+                            if system_node.is_file() {
+                                log_helper_api(format!("using system Node for dev: {}", system_node.display()));
+                                return normalize_windows_path(system_node);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    normalize_windows_path(resource_dir.join("node.exe"))
 }
 
 fn normalize_windows_path(path: PathBuf) -> PathBuf {
@@ -238,8 +288,13 @@ fn normalize_windows_path(path: PathBuf) -> PathBuf {
     path
 }
 
+fn args_request_hidden(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| arg == "--hidden" || arg == "--startup")
+}
+
 fn launch_hidden() -> bool {
-    env::args().any(|arg| arg == "--hidden" || arg == "--startup")
+    args_request_hidden(&env::args().collect::<Vec<_>>())
 }
 
 fn current_exe_path() -> PathBuf {

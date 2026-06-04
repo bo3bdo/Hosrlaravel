@@ -95,27 +95,37 @@ export async function generateMysqlIni(): Promise<string> {
   const config = await loadConfig();
   const runtime = databaseRuntimeForVersion(config.mysql.version);
   const paths = mysqlPathsForVersion(config.mysql.version);
+  const pluginDir = mysqlPluginDir(config.mysql.version);
 
-  const lines = [
+  const mysqldLines = [
     "[mysqld]",
     `basedir=${toNginxPath(paths.root)}`,
     `datadir=${toNginxPath(paths.data)}`,
+    `plugin-dir=${pluginDir}`,
     `port=${config.mysql.port}`,
     "bind-address=127.0.0.1",
     "skip-name-resolve",
-    `log-error=${toNginxPath(path.join(getPaths().logs, "mysql-error.log"))}`,
+    `log-error=${toNginxPath(path.join(getPaths().logs, "mysql-error.log"))}`
+  ];
+
+  if (isMariaDbRuntime(runtime)) {
+    mysqldLines.push("default-authentication-plugin=mysql_native_password");
+  } else {
+    mysqldLines.splice(6, 0, "mysqlx-bind-address=127.0.0.1");
+  }
+
+  const clientLines = [
     "",
     "[client]",
     "host=127.0.0.1",
     `port=${config.mysql.port}`,
-    `user=${config.mysql.rootUser}`
+    `user=${config.mysql.rootUser}`,
+    `plugin-dir=${pluginDir}`,
+    "default-auth=mysql_native_password",
+    "ssl=0"
   ];
 
-  if (!isMariaDbRuntime(runtime)) {
-    lines.splice(5, 0, "mysqlx-bind-address=127.0.0.1");
-  }
-
-  return lines.join("\n");
+  return [...mysqldLines, ...clientLines].join("\n");
 }
 
 export async function setMysqlPort(port: number): Promise<void> {
@@ -159,8 +169,7 @@ export async function buildMysqlCommand(action: ServiceAction): Promise<CommandS
 
   if (action === "stop") {
     const password = await readSecret(mysqlRootPasswordKey);
-    const args = ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser];
-    args.push("shutdown");
+    const args = [...mysqlClientArgs(config), "shutdown"];
     return {
       command: mysqlBinaryPath("mysqladmin", config.mysql.version),
       args,
@@ -172,7 +181,7 @@ export async function buildMysqlCommand(action: ServiceAction): Promise<CommandS
     const password = await readSecret(mysqlRootPasswordKey);
     return {
       command: mysqlBinaryPath("mysqladmin", config.mysql.version),
-      args: ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser, "shutdown"],
+      args: [...mysqlClientArgs(config), "shutdown"],
       env: password ? { MYSQL_PWD: password } : undefined
     };
   }
@@ -248,6 +257,7 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
   if (action === "start") {
     try {
       await waitForMysql(15_000);
+      await repairRootUserAuthIfNeeded();
     } finally {
       await cleanupMysqlStartupInitFile();
     }
@@ -274,8 +284,7 @@ export async function createDatabase(databaseName: string): Promise<CommandSpec>
   const safeName = validateDatabaseName(databaseName);
   const config = await loadConfig();
   const password = await readSecret(mysqlRootPasswordKey);
-  const args = ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser];
-  args.push("-e", `CREATE DATABASE IF NOT EXISTS \`${safeName}\`;`);
+  const args = [...mysqlClientArgs(config), "-e", `CREATE DATABASE IF NOT EXISTS \`${safeName}\`;`];
   await appendLog("mysql", `create database requested: ${safeName}`);
   return {
     command: mysqlBinaryPath("mysql", config.mysql.version),
@@ -309,7 +318,7 @@ export async function mysqlShellCommand(): Promise<CommandSpec> {
   const password = await readSecret(mysqlRootPasswordKey);
   return {
     command: mysqlBinaryPath("mysql", config.mysql.version),
-    args: ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser],
+    args: mysqlClientArgs(config),
     env: password ? { MYSQL_PWD: password } : undefined
   };
 }
@@ -364,16 +373,11 @@ export async function changeMysqlRootPassword(nextPassword: string): Promise<str
   }
 
   const currentPassword = await readSecret(mysqlRootPasswordKey);
-  const sql = [
-    `ALTER USER '${escapeSqlString(config.mysql.rootUser)}'@'localhost' IDENTIFIED BY '${escapeSqlString(password)}'`,
-    `CREATE USER IF NOT EXISTS '${escapeSqlString(config.mysql.rootUser)}'@'127.0.0.1' IDENTIFIED BY '${escapeSqlString(password)}'`,
-    `ALTER USER '${escapeSqlString(config.mysql.rootUser)}'@'127.0.0.1' IDENTIFIED BY '${escapeSqlString(password)}'`,
-    `GRANT ALL PRIVILEGES ON *.* TO '${escapeSqlString(config.mysql.rootUser)}'@'127.0.0.1' WITH GRANT OPTION`,
-    "FLUSH PRIVILEGES"
-  ].join("; ");
+  const runtime = databaseRuntimeForVersion(config.mysql.version);
+  const sql = buildRootUserGrantSql(config.mysql.rootUser, password, runtime);
   const code = await runHidden({
     command: mysqlBinaryPath("mysql", config.mysql.version),
-    args: ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser, "-e", sql],
+    args: [...mysqlClientArgs(config), "-e", sql],
     env: currentPassword ? { MYSQL_PWD: currentPassword } : undefined
   });
 
@@ -468,26 +472,10 @@ function mariaDbInstallDbPath(version: string): string {
 
 async function applyRootPasswordAfterInitialization(password: string, connectPassword?: string): Promise<void> {
   const config = await loadConfig();
-  const rootUser = escapeSqlString(config.mysql.rootUser);
-  const rootPassword = escapeSqlString(password);
+  const runtime = databaseRuntimeForVersion(config.mysql.version);
   await runForeground({
     command: mysqlBinaryPath("mysql", config.mysql.version),
-    args: [
-      "-h",
-      "127.0.0.1",
-      "-P",
-      String(config.mysql.port),
-      "-u",
-      config.mysql.rootUser,
-      "-e",
-      [
-        `ALTER USER '${rootUser}'@'localhost' IDENTIFIED BY '${rootPassword}'`,
-        `CREATE USER IF NOT EXISTS '${rootUser}'@'127.0.0.1' IDENTIFIED BY '${rootPassword}'`,
-        `ALTER USER '${rootUser}'@'127.0.0.1' IDENTIFIED BY '${rootPassword}'`,
-        `GRANT ALL PRIVILEGES ON *.* TO '${rootUser}'@'127.0.0.1' WITH GRANT OPTION`,
-        "FLUSH PRIVILEGES"
-      ].join("; ")
-    ],
+    args: [...mysqlClientArgs(config), "-e", buildRootUserGrantSql(config.mysql.rootUser, password, runtime)],
     env: connectPassword ? { MYSQL_PWD: connectPassword } : undefined
   });
 }
@@ -524,16 +512,9 @@ function escapeSqlString(value: string): string {
 
 async function writeMysqlStartupInitFile(password: string): Promise<string> {
   const config = await loadConfig();
+  const runtime = databaseRuntimeForVersion(config.mysql.version);
   const initFile = path.join(getPaths().logs, "mysql-startup-init.sql");
-  const rootUser = escapeSqlString(config.mysql.rootUser);
-  const rootPassword = escapeSqlString(password);
-  const sql = [
-    `ALTER USER '${rootUser}'@'localhost' IDENTIFIED BY '${rootPassword}'`,
-    `CREATE USER IF NOT EXISTS '${rootUser}'@'127.0.0.1' IDENTIFIED BY '${rootPassword}'`,
-    `ALTER USER '${rootUser}'@'127.0.0.1' IDENTIFIED BY '${rootPassword}'`,
-    `GRANT ALL PRIVILEGES ON *.* TO '${rootUser}'@'127.0.0.1' WITH GRANT OPTION`,
-    "FLUSH PRIVILEGES"
-  ].join(";\n");
+  const sql = buildRootUserGrantSql(config.mysql.rootUser, password, runtime);
   await mkdir(getPaths().logs, { recursive: true });
   await writeFile(initFile, `${sql};\n`, "utf8");
   return initFile;
@@ -550,6 +531,54 @@ function mysqlPathsForVersion(version: string): { root: string; data: string; co
     data: mysqlDataForVersion(version),
     config: path.join(root, "my.ini")
   };
+}
+
+export function mysqlClientArgs(config: { mysql: { port: number; rootUser: string; version: string } }): string[] {
+  const iniPath = toNginxPath(mysqlPathsForVersion(config.mysql.version).config);
+  return [`--defaults-file=${iniPath}`, "-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser];
+}
+
+function mysqlPluginDir(version: string): string {
+  return toNginxPath(path.join(mysqlRootForVersion(version), "lib", "plugin"));
+}
+
+function buildRootUserGrantSql(rootUser: string, password: string, runtime: RuntimeManifestEntry): string {
+  const user = escapeSqlString(rootUser);
+  const secret = escapeSqlString(password);
+  const identified = isMariaDbRuntime(runtime)
+    ? `IDENTIFIED VIA mysql_native_password USING PASSWORD('${secret}')`
+    : `IDENTIFIED BY '${secret}'`;
+
+  return [
+    `ALTER USER '${user}'@'localhost' ${identified}`,
+    `CREATE USER IF NOT EXISTS '${user}'@'127.0.0.1' ${identified}`,
+    `ALTER USER '${user}'@'127.0.0.1' ${identified}`,
+    `GRANT ALL PRIVILEGES ON *.* TO '${user}'@'127.0.0.1' WITH GRANT OPTION`,
+    "FLUSH PRIVILEGES"
+  ].join("; ");
+}
+
+async function repairRootUserAuthIfNeeded(): Promise<void> {
+  const config = await loadConfig();
+  const runtime = databaseRuntimeForVersion(config.mysql.version);
+  if (!isMariaDbRuntime(runtime)) {
+    return;
+  }
+
+  const password = await readSecret(mysqlRootPasswordKey);
+  if (!password) {
+    return;
+  }
+
+  const code = await runHidden({
+    command: mysqlBinaryPath("mysql", config.mysql.version),
+    args: [...mysqlClientArgs(config), "-e", buildRootUserGrantSql(config.mysql.rootUser, password, runtime)],
+    env: { MYSQL_PWD: password }
+  });
+
+  if (code === 0) {
+    await appendLog("mysql", "root user auth normalized to mysql_native_password");
+  }
 }
 
 async function waitForMysql(timeoutMs: number): Promise<void> {

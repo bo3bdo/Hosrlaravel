@@ -105,18 +105,35 @@ const sections: Array<{ id: Section; label: string; labelAr: string; icon: typeo
   { id: "settings", label: "Settings", labelAr: "الإعدادات", icon: Settings }
 ];
 
+const sectionMeta: Record<Section, { subtitleEn: string; subtitleAr: string }> = {
+  dashboard: { subtitleEn: "Stack overview and quick actions", subtitleAr: "نظرة عامة وإجراءات سريعة" },
+  sites: { subtitleEn: "Domains, commands, and project settings", subtitleAr: "الدومينات والأوامر وإعدادات المشروع" },
+  services: { subtitleEn: "PHP, Nginx, database, and Redis", subtitleAr: "PHP وNginx وقاعدة البيانات وRedis" },
+  tools: { subtitleEn: "Database, ports, and runtime updates", subtitleAr: "قاعدة البيانات والمنافذ وتحديثات الأدوات" },
+  logs: { subtitleEn: "Runtime output and troubleshooting", subtitleAr: "مخرجات التشغيل واستكشاف الأخطاء" },
+  settings: { subtitleEn: "Workspace, paths, and security", subtitleAr: "مساحة العمل والمسارات والأمان" }
+};
+
 const shellCopy = {
   en: {
     brandSubtitle: "Windows local dev",
     refresh: "Refresh",
     loading: "Loading laraboxs state...",
-    languageButton: "AR"
+    languageButton: "AR",
+    live: "Live",
+    servicesRunning: "services running",
+    sitesCount: "sites",
+    version: "v0.1.0"
   },
   ar: {
     brandSubtitle: "بيئة تطوير ويندوز",
     refresh: "تحديث",
     loading: "جار تحميل حالة laraboxs...",
-    languageButton: "EN"
+    languageButton: "EN",
+    live: "مباشر",
+    servicesRunning: "خدمات تعمل",
+    sitesCount: "مواقع",
+    version: "v0.1.0"
   }
 } satisfies Record<AppLanguage, Record<string, string>>;
 
@@ -250,7 +267,12 @@ export default function App() {
 
   const active = useMemo(() => sections.find((item) => item.id === section)!, [section]);
   const activeLabel = sectionLabel(active, language);
+  const activeSubtitle = language === "ar" ? sectionMeta[section].subtitleAr : sectionMeta[section].subtitleEn;
   const copy = shellCopy[language];
+  const runningServicesCount = summary
+    ? [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter((service) => service.state === "running").length
+    : 0;
+  const stackTone = runningServicesCount === 4 ? "green" : runningServicesCount > 0 ? "amber" : "red";
 
   if (!summary) {
     return <BootScreen error={error} busy={busy} refresh={refresh} />;
@@ -278,18 +300,27 @@ export default function App() {
     <div className={`app-shell ${language === "ar" ? "rtl" : ""}`} dir={language === "ar" ? "rtl" : "ltr"}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">L</div>
+          <div className="brand-mark">
+            <span>L</span>
+          </div>
           <div>
             <strong>laraboxs</strong>
             <span>{copy.brandSubtitle}</span>
           </div>
         </div>
-        <nav>
+        <nav aria-label={language === "ar" ? "التنقل الرئيسي" : "Main navigation"}>
           {sections.map((item) => {
             const Icon = item.icon;
             const badge = summary ? serviceBadgeForSection(item.id, summary) : null;
+            const isActive = section === item.id;
             return (
-              <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}>
+              <button
+                key={item.id}
+                className={isActive ? "active" : ""}
+                aria-current={isActive ? "page" : undefined}
+                onClick={() => setSection(item.id)}
+              >
+                <span className="nav-indicator" aria-hidden="true" />
                 <Icon size={18} />
                 <span>{sectionLabel(item, language)}</span>
                 {badge ?? null}
@@ -297,47 +328,81 @@ export default function App() {
             );
           })}
         </nav>
+        <div className="sidebar-footer">
+          <div className={`sidebar-stack-pill ${stackTone}`}>
+            <span className="status-dot pulse" />
+            <span>
+              {runningServicesCount}/4 {copy.servicesRunning}
+            </span>
+          </div>
+        </div>
       </aside>
 
-      <main>
-        <header className="topbar">
-          <div>
+      <div className="main-frame">
+        <header className="topbar desktop-titlebar">
+          <div className="topbar-leading">
             <span className="eyebrow">{activeLabel}</span>
             <h1>{activeLabel}</h1>
+            <p className="topbar-subtitle">{activeSubtitle}</p>
           </div>
           <div className="topbar-actions">
+            <div className={`live-pill ${stackTone}`} title={`${runningServicesCount}/4 ${copy.servicesRunning}`}>
+              <span className="status-dot pulse" />
+              <span>{copy.live}</span>
+            </div>
             <button className="icon-button" onClick={() => setLanguage((current) => (current === "en" ? "ar" : "en"))} title="Toggle language">
               <Languages size={18} />
               <span>{copy.languageButton}</span>
             </button>
-            <button className="icon-button" onClick={() => void refresh()} disabled={busy} title="Refresh">
+            <button className={`icon-button ${busy ? "is-busy" : ""}`} onClick={() => void refresh()} disabled={busy} title="Refresh">
               <RotateCw size={18} />
               <span>{copy.refresh}</span>
             </button>
           </div>
         </header>
 
-        {error ? <div className="notice">{error}</div> : null}
+        {error ? <div className="notice app-notice">{error}</div> : null}
 
         {!summary ? (
-          <div className="empty-state">{copy.loading}</div>
+          <div className="empty-state desktop-empty">{copy.loading}</div>
         ) : (
           <section className="content">
-            {section === "dashboard" ? <Dashboard summary={summary} post={post} busy={busy} onNavigate={setSection} language={language} /> : null}
-            {section === "sites" ? <Sites summary={summary} post={post} request={request} busy={busy} onNavigate={setSection} /> : null}
-            {section === "services" ? (
-              <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
-            ) : null}
-            {section === "tools" ? (
-              <Tools summary={summary} post={post} request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} />
-            ) : null}
-            {section === "logs" ? <Logs summary={summary} post={post} busy={busy} /> : null}
-            {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} /> : null}
+            <div key={section} className="page-view">
+              {section === "dashboard" ? <Dashboard summary={summary} post={post} busy={busy} onNavigate={setSection} language={language} /> : null}
+              {section === "sites" ? <Sites summary={summary} post={post} request={request} busy={busy} onNavigate={setSection} /> : null}
+              {section === "services" ? (
+                <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
+              ) : null}
+              {section === "tools" ? (
+                <Tools summary={summary} post={post} request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} />
+              ) : null}
+              {section === "logs" ? <Logs summary={summary} post={post} busy={busy} /> : null}
+              {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} /> : null}
+            </div>
           </section>
         )}
-      </main>
 
-      <ToastContainer toasts={toasts} removeToast={removeToast} />
+        <footer className="status-bar">
+          <div className="status-bar-group">
+            <span className={`status-dot ${stackTone}`} />
+            <span>
+              {runningServicesCount}/4 {copy.servicesRunning}
+            </span>
+            <span className="status-bar-sep" aria-hidden="true" />
+            <span>
+              {summary.sites.length} {copy.sitesCount}
+            </span>
+          </div>
+          <div className="status-bar-group muted">
+            <span>PHP {summary.config.globalPhpVersion}</span>
+            <span className="status-bar-sep" aria-hidden="true" />
+            <span>.{summary.config.tld}</span>
+          </div>
+          <div className="status-bar-group muted">{copy.version}</div>
+        </footer>
+      </div>
+
+      <ToastContainer toasts={toasts} removeToast={removeToast} language={language} />
     </div>
   );
 }
@@ -345,9 +410,12 @@ export default function App() {
 function BootScreen({ error, busy, refresh }: { error: string | null; busy: boolean; refresh: () => Promise<void> }) {
   return (
     <div className="boot-shell">
-      <div className="boot-panel">
+      <div className="boot-glow" aria-hidden="true" />
+      <div className="boot-panel desktop-panel">
         <div className="brand">
-          <div className="brand-mark">L</div>
+          <div className="brand-mark">
+            <span>L</span>
+          </div>
           <div>
             <strong>laraboxs</strong>
             <span>Windows local dev</span>
@@ -359,6 +427,9 @@ function BootScreen({ error, busy, refresh }: { error: string | null; busy: bool
             <strong>Loading local stack state</strong>
             <span>{error ?? "Checking runtimes and services..."}</span>
           </div>
+        </div>
+        <div className="boot-progress-track" aria-hidden="true">
+          <div className="boot-progress-fill" />
         </div>
         <button onClick={() => void refresh()} disabled={busy}>
           <RotateCw size={18} />
@@ -2079,10 +2150,11 @@ function Sites({
 }) {
   const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
   const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
-  const [siteTab, setSiteTab] = useState<"general" | "information">("general");
+  const [siteTab, setSiteTab] = useState<"general" | "commands" | "workers" | "information">("general");
   const [newSiteOpen, setNewSiteOpen] = useState(false);
   const [siteSearch, setSiteSearch] = useState("");
   const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
+  const isLaravelSite = selectedSite?.framework === "Laravel";
   const [entryPath, setEntryPath] = useState(selectedSite?.entryPath ?? ".");
   const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
   const [siteHealth, setSiteHealth] = useState<SiteHealthStatus | null>(null);
@@ -2116,6 +2188,12 @@ function Sites({
     setEntryPath(selectedSite?.entryPath ?? ".");
     setSitePhpVersion(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
   }, [selectedSite?.domain, selectedSite?.entryPath, selectedSite?.phpVersion, summary.config.globalPhpVersion]);
+
+  useEffect(() => {
+    if (siteTab === "workers" && !isLaravelSite) {
+      setSiteTab("general");
+    }
+  }, [isLaravelSite, siteTab, selectedSite?.domain]);
 
   useEffect(() => {
     if (!selectedSite) {
@@ -2275,9 +2353,21 @@ function Sites({
               </button>
             </div>
 
-            <div className="site-detail-tabs">
-              <button className={siteTab === "general" ? "active" : ""} onClick={() => setSiteTab("general")}>General</button>
-              <button className={siteTab === "information" ? "active" : ""} onClick={() => setSiteTab("information")}>Information</button>
+            <div className="site-detail-tabs" role="tablist" aria-label="Site sections">
+              <button role="tab" aria-selected={siteTab === "general"} className={siteTab === "general" ? "active" : ""} onClick={() => setSiteTab("general")}>
+                General
+              </button>
+              <button role="tab" aria-selected={siteTab === "commands"} className={siteTab === "commands" ? "active" : ""} onClick={() => setSiteTab("commands")}>
+                Commands
+              </button>
+              {isLaravelSite ? (
+                <button role="tab" aria-selected={siteTab === "workers"} className={siteTab === "workers" ? "active" : ""} onClick={() => setSiteTab("workers")}>
+                  Workers
+                </button>
+              ) : null}
+              <button role="tab" aria-selected={siteTab === "information"} className={siteTab === "information" ? "active" : ""} onClick={() => setSiteTab("information")}>
+                Information
+              </button>
             </div>
 
             {siteTab === "general" ? (
@@ -2347,6 +2437,14 @@ function Sites({
                   </div>
                 </div>
               </>
+            ) : siteTab === "commands" ? (
+              <div className="site-tab-panel">
+                <ProjectTools site={selectedSite} request={request} busy={busy} />
+              </div>
+            ) : siteTab === "workers" && isLaravelSite ? (
+              <div className="site-tab-panel">
+                <WorkerTools site={selectedSite} request={request} busy={busy} />
+              </div>
             ) : (
               <dl className="details site-info-details">
                 <dt>Domain</dt>
@@ -3839,7 +3937,7 @@ function Logs({ summary, post, busy }: ViewProps) {
   );
 }
 
-type ToolsPane = "project" | "database" | "workers" | "ports" | "updates";
+type ToolsPane = "database" | "ports" | "updates";
 
 function Tools({
   summary,
@@ -3850,22 +3948,12 @@ function Tools({
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
   startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
 }) {
-  const [pane, setPane] = useState<ToolsPane>("project");
-  const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
-  const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
+  const [pane, setPane] = useState<ToolsPane>("database");
   const panes: Array<{ id: ToolsPane; label: string; detail: string; icon: typeof Globe }> = [
-    { id: "project", label: "Project", detail: "commands and diagnostics", icon: SquareTerminal },
     { id: "database", label: "Database", detail: "tables, export, import", icon: Database },
-    { id: "workers", label: "Workers", detail: "queue and scheduler", icon: Play },
     { id: "ports", label: "Ports", detail: "conflicts and suggestions", icon: Network },
     { id: "updates", label: "Updates", detail: "runtimes and Laravel", icon: PackageCheck }
   ];
-
-  useEffect(() => {
-    if (!summary.sites.some((site) => site.domain === selectedDomain)) {
-      setSelectedDomain(summary.sites[0]?.domain ?? "");
-    }
-  }, [selectedDomain, summary.sites]);
 
   return (
     <div className="tools-view">
@@ -3884,26 +3972,7 @@ function Tools({
         })}
       </div>
 
-      {(pane === "project" || pane === "workers") && summary.sites.length ? (
-        <section className="settings-panel tools-site-picker">
-          <SettingsPanelHeader icon={Globe} title="Selected Site" detail={selectedSite ? selectedSite.path : "No local site selected"} />
-          <select value={selectedSite?.domain ?? ""} onChange={(event) => setSelectedDomain(event.target.value)}>
-            {summary.sites.map((site) => (
-              <option key={site.domain} value={site.domain}>
-                {site.domain}
-              </option>
-            ))}
-          </select>
-        </section>
-      ) : null}
-
-      {pane === "project" ? (
-        selectedSite ? <ProjectTools site={selectedSite} request={request} busy={busy} /> : <div className="empty-state">No parked projects found.</div>
-      ) : null}
       {pane === "database" ? <DatabaseTools summary={summary} request={request} busy={busy} /> : null}
-      {pane === "workers" ? (
-        selectedSite ? <WorkerTools site={selectedSite} request={request} busy={busy} /> : <div className="empty-state">No Laravel projects found.</div>
-      ) : null}
       {pane === "ports" ? <PortTools request={request} busy={busy} /> : null}
       {pane === "updates" ? <UpdateTools request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} /> : null}
     </div>

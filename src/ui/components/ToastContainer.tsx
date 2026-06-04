@@ -1,11 +1,19 @@
 import { X } from "lucide-react";
 import type { Toast } from "./useToasts.js";
 
-export function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast: (id: string) => void }) {
+export function ToastContainer({
+  toasts,
+  removeToast,
+  language = "en"
+}: {
+  toasts: Toast[];
+  removeToast: (id: string) => void;
+  language?: "en" | "ar";
+}) {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="toast-stack" role="region" aria-live="polite">
+    <div className={`toast-stack ${language === "ar" ? "rtl" : ""}`} role="region" aria-live="polite">
       {toasts.map((toast) => (
         <div key={toast.id} className={`toast toast-${toast.type}`}>
           <span>{toast.message}</span>

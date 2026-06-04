@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { appendLog } from "./logging.js";
-import { mysqlBinaryPath, runCreateDatabase } from "./mysql.js";
+import { mysqlBinaryPath, mysqlClientArgs, runCreateDatabase } from "./mysql.js";
 import { getPaths } from "./paths.js";
 import { readSecret } from "./secretStore.js";
 import type { CommandSpec, DatabaseExportResult, DatabaseInfo, DatabaseTableInfo } from "./types.js";
@@ -57,7 +57,7 @@ export async function exportDatabase(database: string): Promise<DatabaseExportRe
   const outputPath = path.join(exportsDir, `${safeName}-${new Date().toISOString().replace(/[:.]/g, "-")}.sql`);
   const command: CommandSpec = {
     command: mysqlBinaryPath("mysqldump", config.mysql.version),
-    args: ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser, "--result-file", outputPath, safeName],
+    args: [...mysqlClientArgs(config), "--result-file", outputPath, safeName],
     env: password ? { MYSQL_PWD: password } : undefined
   };
   await runCommand(command);
@@ -76,7 +76,7 @@ export async function importDatabase(database: string, sqlFile: string): Promise
   const password = await readSecret(mysqlRootPasswordKey);
   const command: CommandSpec = {
     command: mysqlBinaryPath("mysql", config.mysql.version),
-    args: ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser, safeName],
+    args: [...mysqlClientArgs(config), safeName],
     env: password ? { MYSQL_PWD: password } : undefined
   };
   await runCommand(command, { stdinFile: resolvedFile });
@@ -86,7 +86,7 @@ export async function importDatabase(database: string, sqlFile: string): Promise
 async function runMysqlQuery(sql: string, options: { raw?: boolean } = {}): Promise<string[]> {
   const config = await loadConfig();
   const password = await readSecret(mysqlRootPasswordKey);
-  const args = ["-h", "127.0.0.1", "-P", String(config.mysql.port), "-u", config.mysql.rootUser, "--batch", "--skip-column-names", "-e", sql];
+  const args = [...mysqlClientArgs(config), "--batch", "--skip-column-names", "-e", sql];
   const result = await runCommand({
     command: mysqlBinaryPath("mysql", config.mysql.version),
     args,

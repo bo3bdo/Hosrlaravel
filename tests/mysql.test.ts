@@ -25,7 +25,11 @@ describe("mysql command logic", () => {
     expect(ini).toContain("port=3307");
     expect(ini).toContain("bind-address=127.0.0.1");
     expect(ini).toContain("mysqlx-bind-address=127.0.0.1");
+    expect(ini).toContain("plugin-dir=");
+    expect(ini).toContain("default-auth=mysql_native_password");
+    expect(ini).toContain("ssl=0");
     expect(ini).toContain("log-error=");
+    expect(ini).not.toContain("\\services");
   });
 
   it("builds a mysqld start command from the generated config", async () => {
@@ -52,6 +56,8 @@ describe("mysql command logic", () => {
 
     expect(ini).toContain(path.join("services", "mariadb", "11.8.6").replace(/\\/g, "/"));
     expect(ini).toContain(path.join("services", "mariadb", "11.8.6", "data").replace(/\\/g, "/"));
+    expect(ini).toContain(path.join("services", "mariadb", "11.8.6", "lib", "plugin").replace(/\\/g, "/"));
+    expect(ini).toContain("default-authentication-plugin=mysql_native_password");
     expect(ini).not.toContain("mysqlx-bind-address");
   });
 
@@ -60,8 +66,10 @@ describe("mysql command logic", () => {
     const command = await createDatabase("app_name");
     const shell = await mysqlShellCommand();
 
+    expect(command.args.join(" ")).toContain("--defaults-file=");
     expect(command.args.join(" ")).not.toContain("--password");
     expect(command.env?.MYSQL_PWD).toBeTruthy();
+    expect(shell.args.join(" ")).toContain("--defaults-file=");
     expect(shell.args).not.toContain("-p");
     expect(shell.env?.MYSQL_PWD).toBeTruthy();
   });

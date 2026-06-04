@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "app.laraboxs.local",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:tauri",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "npm run build && npm run package:tauri-resources",
+    "beforeBuildCommand": "npm run build && npm run dev:tauri-prep && npm run package:tauri-resources",
     "frontendDist": "../dist-ui"
   },
   "app": {
