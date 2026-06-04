@@ -22,6 +22,12 @@ Repository: [github.com/bo3bdo/Hosrlaravel](https://github.com/bo3bdo/Hosrlarave
 
 <p align="center"><strong>Sites</strong> — Parked folders, per-site preview, PHP version, and Nginx entry paths.</p>
 
+<p align="center">
+  <img src="docs/screenshots/33.jpg" alt="laraboxs site commands, environment helper, and diagnostics" width="920" />
+</p>
+
+<p align="center"><strong>Sites · Commands</strong> — Artisan shortcuts, Laravel <code>.env</code> helper, and site diagnostics.</p>
+
 <table>
   <tr>
     <td width="50%" align="center">
