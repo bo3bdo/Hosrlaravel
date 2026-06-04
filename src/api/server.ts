@@ -35,11 +35,19 @@ import { tryEnsureWindowsDefenderExclusion } from "../core/defender.js";
 import { getDashboardSummary } from "../core/summary.js";
 import { readSitePreviewImage } from "../core/sitePreview.js";
 import { checkSiteHealth } from "../core/siteHealth.js";
+import { getSiteDiagnosticReport } from "../core/siteDiagnostics.js";
 import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLaravelInstaller } from "../core/laravelInstaller.js";
 import { clearLogs } from "../core/logging.js";
 import { getStartupStatus, startConfiguredServicesOnLaunch, updateStartupSettings } from "../core/startup.js";
-import type { NewSiteRequest, RuntimeKind, ServiceAction } from "../core/types.js";
+import { siteCommandDefinitions } from "../core/siteCommands.js";
+import { applySiteEnvProfile, siteEnvProfiles } from "../core/siteEnv.js";
+import { listDatabases, listDatabaseTables, createManagedDatabase, dropManagedDatabase, exportDatabase, importDatabase } from "../core/databaseManager.js";
+import { checkLaraboxsPorts } from "../core/portTools.js";
+import { getUpdateCenterStatus } from "../core/updateCenter.js";
+import type { NewSiteRequest, RuntimeKind, ServiceAction, SiteCommandKind, SiteEnvProfileKind, SiteWorkerKind } from "../core/types.js";
 import { getSiteCreationJob, startSiteCreationJob } from "./siteJobs.js";
+import { getSiteCommandJob, listSiteCommandJobs, startSiteCommandJob } from "./siteCommandJobs.js";
+import { listSiteWorkers, startSiteWorker, stopSiteWorker } from "./siteWorkers.js";
 import { ApiHttpError, apiSecurityHeaders, assertTrustedApiRequest, corsOrigin, maxJsonBodyBytes, statusForError } from "./httpSecurity.js";
 
 const host = "127.0.0.1";
@@ -95,6 +103,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/summary") {
       await sendJson(response, await getDashboardSummary());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/updates") {
+      await sendJson(response, await getUpdateCenterStatus());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/ports/check") {
+      await sendJson(response, { ports: await checkLaraboxsPorts() });
       return;
     }
 
@@ -172,6 +190,71 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request);
       const job = startSiteCreationJob(assertNewSiteRequest(body));
       await sendJson(response, { ok: true, job });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/commands") {
+      await sendJson(response, { commands: siteCommandDefinitions });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/commands/jobs") {
+      const site = url.searchParams.get("site") ?? undefined;
+      await sendJson(response, { jobs: listSiteCommandJobs(site) });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/sites/commands/jobs/")) {
+      const jobId = decodeURIComponent(url.pathname.slice("/api/sites/commands/jobs/".length));
+      const job = getSiteCommandJob(jobId);
+      if (!job) {
+        response.writeHead(404, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "Site command job not found." }));
+        return;
+      }
+      await sendJson(response, { job });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/sites/commands/run") {
+      const body = await readJson(request);
+      const job = startSiteCommandJob(assertString(body.site, "site"), assertSiteCommandKind(body.command));
+      await sendJson(response, { ok: true, job });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/env") {
+      const site = assertString(url.searchParams.get("site"), "site");
+      await sendJson(response, await siteEnvProfiles(site));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/sites/env/apply") {
+      const body = await readJson(request);
+      const result = await applySiteEnvProfile(assertString(body.site, "site"), assertSiteEnvProfileKind(body.profile), {
+        createDatabase: body.createDatabase === true
+      });
+      await sendJson(response, { ok: true, result });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/workers") {
+      const site = url.searchParams.get("site") ?? undefined;
+      await sendJson(response, { workers: listSiteWorkers(site) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/sites/workers/start") {
+      const body = await readJson(request);
+      const worker = await startSiteWorker(assertString(body.site, "site"), assertSiteWorkerKind(body.kind));
+      await sendJson(response, { ok: true, worker });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/sites/workers/stop") {
+      const body = await readJson(request);
+      const worker = await stopSiteWorker(assertString(body.site, "site"), assertSiteWorkerKind(body.kind));
+      await sendJson(response, { ok: true, worker });
       return;
     }
 
@@ -253,6 +336,12 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/sites/health") {
       const site = assertString(url.searchParams.get("site"), "site");
       await sendJson(response, await checkSiteHealth(site));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/diagnostics") {
+      const site = assertString(url.searchParams.get("site"), "site");
+      await sendJson(response, await getSiteDiagnosticReport(site));
       return;
     }
 
@@ -415,6 +504,43 @@ const server = http.createServer(async (request, response) => {
       }
 
       await sendJson(response, await runMysql(serviceAction(actionName)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/databases") {
+      await sendJson(response, { databases: await listDatabases() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/databases/tables") {
+      const database = assertString(url.searchParams.get("database"), "database");
+      await sendJson(response, { tables: await listDatabaseTables(database) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/databases/create") {
+      const body = await readJson(request);
+      await sendJson(response, { ok: true, database: await createManagedDatabase(assertString(body.name, "name")) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/databases/drop") {
+      const body = await readJson(request);
+      await dropManagedDatabase(assertString(body.name, "name"));
+      await sendJson(response, { ok: true });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/databases/export") {
+      const body = await readJson(request);
+      await sendJson(response, { ok: true, export: await exportDatabase(assertString(body.name, "name")) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/databases/import") {
+      const body = await readJson(request);
+      await importDatabase(assertString(body.name, "name"), assertString(body.path, "path"));
+      await sendJson(response, { ok: true });
       return;
     }
 
@@ -940,4 +1066,32 @@ function assertRuntimeKind(value: unknown): RuntimeKind {
     return value;
   }
   throw new ApiHttpError(400, `Unsupported runtime: ${String(value)}`);
+}
+
+function assertSiteCommandKind(value: unknown): SiteCommandKind {
+  if (
+    value === "artisan:migrate" ||
+    value === "artisan:cache-clear" ||
+    value === "artisan:route-list" ||
+    value === "composer:install" ||
+    value === "npm:install" ||
+    value === "npm:build"
+  ) {
+    return value;
+  }
+  throw new ApiHttpError(400, `Unsupported site command: ${String(value)}`);
+}
+
+function assertSiteEnvProfileKind(value: unknown): SiteEnvProfileKind {
+  if (value === "app" || value === "database" || value === "redis" || value === "queue-redis" || value === "full") {
+    return value;
+  }
+  throw new ApiHttpError(400, `Unsupported .env profile: ${String(value)}`);
+}
+
+function assertSiteWorkerKind(value: unknown): SiteWorkerKind {
+  if (value === "queue" || value === "schedule") {
+    return value;
+  }
+  throw new ApiHttpError(400, `Unsupported worker: ${String(value)}`);
 }

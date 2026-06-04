@@ -14,7 +14,7 @@ import type { CommandSpec, RuntimeManifestEntry, ServiceAction, ServiceStatus } 
 
 const mysqlRootPasswordKey = "mysql-root-password";
 
-export function mysqlBinaryPath(binary: "mysqld" | "mysql" | "mysqladmin" = "mysqld", version?: string): string {
+export function mysqlBinaryPath(binary: "mysqld" | "mysql" | "mysqladmin" | "mysqldump" = "mysqld", version?: string): string {
   const extension = process.platform === "win32" ? ".exe" : "";
   const root = version ? mysqlRootForVersion(version) : findRuntimeEntry("mysql").root;
   const bundled = path.join(root, "bin", `${binary}${extension}`);

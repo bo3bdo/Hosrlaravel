@@ -25,6 +25,7 @@ import {
   LockOpen,
   Network,
   PackageCheck,
+  PanelTopOpen,
   Play,
   RotateCw,
   Save,
@@ -40,6 +41,9 @@ import {
 } from "lucide-react";
 import type {
   DashboardSummary,
+  DatabaseExportResult,
+  DatabaseInfo,
+  DatabaseTableInfo,
   LaravelAuthPreset,
   LaravelDatabaseDriver,
   LaravelInstallerStatus,
@@ -54,31 +58,33 @@ import type {
   RuntimeInstallStatus,
   RuntimeKind,
   ServiceStatus,
+  SiteCommandDefinition,
+  SiteCommandJob,
+  SiteCommandKind,
   SiteCreationJob,
   Site,
   SiteCreationResult,
-  StartupStatus
+  SiteDiagnosticReport,
+  SiteEnvApplyResult,
+  SiteEnvProfile,
+  SiteEnvProfileKind,
+  SiteHealthStatus,
+  SiteWorkerKind,
+  SiteWorkerStatus,
+  StartupStatus,
+  UpdateCenterStatus,
+  PortCheckResult
 } from "./types.js";
 import { apiUrl, copyTextToClipboard, fetchRuntimeInstallJob, getJson, openExternalUrl, postJson, responseErrorMessage } from "./apiClient.js";
 import { HealthCheckPanel } from "./components/HealthCheckPanel.js";
 import { ToastContainer } from "./components/ToastContainer.js";
 import { useToasts, showToast } from "./components/useToasts.js";
 
-type Section = "dashboard" | "sites" | "services" | "logs" | "settings";
+type Section = "dashboard" | "sites" | "services" | "tools" | "logs" | "settings";
 type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
 type DatabaseEngine = "mysql" | "mariadb";
 type RuntimeJobMap = Record<string, RuntimeInstallJob>;
 type AppLanguage = "en" | "ar";
-type SiteHealthStatus = {
-  domain: string;
-  url: string;
-  state: "ok" | "error";
-  statusCode?: number;
-  statusMessage?: string;
-  message: string;
-  responseTimeMs: number;
-  checkedAt: string;
-};
 type WizardStepId = "folder" | "install" | "finish";
 type WizardTaskStatus = "pending" | "running" | "complete" | "failed";
 type WizardTaskState = { status: WizardTaskStatus; message?: string };
@@ -94,6 +100,7 @@ const sections: Array<{ id: Section; label: string; labelAr: string; icon: typeo
   { id: "dashboard", label: "Dashboard", labelAr: "لوحة التحكم", icon: LayoutDashboard },
   { id: "sites", label: "Sites", labelAr: "المواقع", icon: Globe },
   { id: "services", label: "Services", labelAr: "الخدمات", icon: Server },
+  { id: "tools", label: "Tools", labelAr: "الأدوات", icon: PanelTopOpen },
   { id: "logs", label: "Logs", labelAr: "السجلات", icon: FileText },
   { id: "settings", label: "Settings", labelAr: "الإعدادات", icon: Settings }
 ];
@@ -320,6 +327,9 @@ export default function App() {
             {section === "sites" ? <Sites summary={summary} post={post} request={request} busy={busy} onNavigate={setSection} /> : null}
             {section === "services" ? (
               <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
+            ) : null}
+            {section === "tools" ? (
+              <Tools summary={summary} post={post} request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} />
             ) : null}
             {section === "logs" ? <Logs summary={summary} post={post} busy={busy} /> : null}
             {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} /> : null}
@@ -3827,6 +3837,710 @@ function Logs({ summary, post, busy }: ViewProps) {
       </div>
     </div>
   );
+}
+
+type ToolsPane = "project" | "database" | "workers" | "ports" | "updates";
+
+function Tools({
+  summary,
+  request,
+  startRuntimeInstall,
+  busy
+}: ViewProps & {
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
+}) {
+  const [pane, setPane] = useState<ToolsPane>("project");
+  const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
+  const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
+  const panes: Array<{ id: ToolsPane; label: string; detail: string; icon: typeof Globe }> = [
+    { id: "project", label: "Project", detail: "commands and diagnostics", icon: SquareTerminal },
+    { id: "database", label: "Database", detail: "tables, export, import", icon: Database },
+    { id: "workers", label: "Workers", detail: "queue and scheduler", icon: Play },
+    { id: "ports", label: "Ports", detail: "conflicts and suggestions", icon: Network },
+    { id: "updates", label: "Updates", detail: "runtimes and Laravel", icon: PackageCheck }
+  ];
+
+  useEffect(() => {
+    if (!summary.sites.some((site) => site.domain === selectedDomain)) {
+      setSelectedDomain(summary.sites[0]?.domain ?? "");
+    }
+  }, [selectedDomain, summary.sites]);
+
+  return (
+    <div className="tools-view">
+      <div className="settings-tabs tools-tabs" role="tablist" aria-label="Tool sections">
+        {panes.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button key={item.id} className={pane === item.id ? "active" : ""} onClick={() => setPane(item.id)}>
+              <Icon size={16} />
+              <span>
+                <strong>{item.label}</strong>
+                <small>{item.detail}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {(pane === "project" || pane === "workers") && summary.sites.length ? (
+        <section className="settings-panel tools-site-picker">
+          <SettingsPanelHeader icon={Globe} title="Selected Site" detail={selectedSite ? selectedSite.path : "No local site selected"} />
+          <select value={selectedSite?.domain ?? ""} onChange={(event) => setSelectedDomain(event.target.value)}>
+            {summary.sites.map((site) => (
+              <option key={site.domain} value={site.domain}>
+                {site.domain}
+              </option>
+            ))}
+          </select>
+        </section>
+      ) : null}
+
+      {pane === "project" ? (
+        selectedSite ? <ProjectTools site={selectedSite} request={request} busy={busy} /> : <div className="empty-state">No parked projects found.</div>
+      ) : null}
+      {pane === "database" ? <DatabaseTools summary={summary} request={request} busy={busy} /> : null}
+      {pane === "workers" ? (
+        selectedSite ? <WorkerTools site={selectedSite} request={request} busy={busy} /> : <div className="empty-state">No Laravel projects found.</div>
+      ) : null}
+      {pane === "ports" ? <PortTools request={request} busy={busy} /> : null}
+      {pane === "updates" ? <UpdateTools request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} /> : null}
+    </div>
+  );
+}
+
+function ProjectTools({
+  site,
+  request,
+  busy
+}: {
+  site: Site;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  busy: boolean;
+}) {
+  const [commands, setCommands] = useState<SiteCommandDefinition[]>([]);
+  const [jobs, setJobs] = useState<SiteCommandJob[]>([]);
+  const [diagnostics, setDiagnostics] = useState<SiteDiagnosticReport | null>(null);
+  const [toolError, setToolError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const activeJobKey = jobs
+    .filter((job) => job.status === "queued" || job.status === "running")
+    .map((job) => job.id)
+    .sort()
+    .join("|");
+  const latestJob = jobs[0];
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const [commandsPayload, jobsPayload, diagnosticsPayload] = await Promise.all([
+          getJson<{ commands: SiteCommandDefinition[] }>("/api/sites/commands"),
+          getJson<{ jobs: SiteCommandJob[] }>(`/api/sites/commands/jobs?site=${encodeURIComponent(site.domain)}`),
+          getJson<SiteDiagnosticReport>(`/api/sites/diagnostics?site=${encodeURIComponent(site.domain)}`)
+        ]);
+        if (!cancelled) {
+          setCommands(commandsPayload.commands);
+          setJobs(jobsPayload.jobs);
+          setDiagnostics(diagnosticsPayload);
+          setToolError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setToolError(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [site.domain]);
+
+  useEffect(() => {
+    if (!activeJobKey) return;
+    let cancelled = false;
+    async function poll() {
+      const payload = await getJson<{ jobs: SiteCommandJob[] }>(`/api/sites/commands/jobs?site=${encodeURIComponent(site.domain)}`);
+      if (!cancelled) {
+        setJobs(payload.jobs);
+      }
+    }
+    const timer = window.setInterval(() => void poll(), 1200);
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeJobKey, site.domain]);
+
+  async function runCommand(command: SiteCommandKind) {
+    const payload = (await request("/api/sites/commands/run", { site: site.domain, command })) as { job?: SiteCommandJob };
+    if (payload.job) {
+      setJobs((current) => [payload.job!, ...current.filter((job) => job.id !== payload.job!.id)]);
+    }
+  }
+
+  async function reloadDiagnostics() {
+    try {
+      setDiagnostics(await getJson<SiteDiagnosticReport>(`/api/sites/diagnostics?site=${encodeURIComponent(site.domain)}`));
+      setToolError("");
+    } catch (error) {
+      setToolError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <div className="tools-grid">
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader icon={SquareTerminal} title="Project Commands" detail={site.path} />
+        {toolError ? <div className="notice compact-notice">{toolError}</div> : null}
+        <div className="tools-action-grid">
+          {commands.map((command) => (
+            <button key={command.id} disabled={busy || loading || latestJob?.status === "running"} onClick={() => void runCommand(command.id)} title={command.detail}>
+              <SquareTerminal size={16} />
+              <span>{command.label}</span>
+            </button>
+          ))}
+        </div>
+        {latestJob ? <CommandJobPanel job={latestJob} /> : <div className="settings-empty-row">No commands have run for this site yet.</div>}
+      </section>
+
+      <EnvHelperPanel site={site} request={request} busy={busy} />
+
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader
+          icon={Activity}
+          title="Diagnostics"
+          detail={diagnostics ? `${diagnostics.summary.fail} failures, ${diagnostics.summary.warn} warnings` : "Checking site"}
+        />
+        <div className="settings-actions">
+          <button disabled={busy || loading} onClick={() => void reloadDiagnostics()}>
+            <RotateCw size={16} />
+            <span>Recheck</span>
+          </button>
+        </div>
+        <div className="diagnostic-grid">
+          {diagnostics?.checks.map((check) => (
+            <div key={check.id} className={`diagnostic-item ${check.tone}`}>
+              {check.tone === "pass" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}
+              <div>
+                <strong>{check.label}</strong>
+                <span>{check.detail}</span>
+                {check.tone !== "pass" && check.fix ? <small>{check.fix}</small> : null}
+              </div>
+            </div>
+          ))}
+          {!diagnostics ? <div className="settings-empty-row">Loading diagnostics...</div> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function EnvHelperPanel({
+  site,
+  request,
+  busy
+}: {
+  site: Site;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  busy: boolean;
+}) {
+  const [profiles, setProfiles] = useState<SiteEnvProfile[]>([]);
+  const [envPath, setEnvPath] = useState("");
+  const [selectedProfile, setSelectedProfile] = useState<SiteEnvProfileKind>("full");
+  const [createDatabase, setCreateDatabase] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const profile = profiles.find((item) => item.id === selectedProfile) ?? profiles[0];
+  const canCreateDatabase = Boolean(profile?.values.DB_DATABASE);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProfiles() {
+      setLoading(true);
+      setError("");
+      try {
+        const payload = await getJson<{ site: Site; envPath: string; profiles: SiteEnvProfile[] }>(`/api/sites/env?site=${encodeURIComponent(site.domain)}`);
+        if (!cancelled) {
+          setProfiles(payload.profiles);
+          setEnvPath(payload.envPath);
+          setSelectedProfile((current) => (payload.profiles.some((item) => item.id === current) ? current : "full"));
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : String(requestError));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+    void loadProfiles();
+    return () => {
+      cancelled = true;
+    };
+  }, [site.domain]);
+
+  async function copyProfile() {
+    if (!profile) return;
+    await copyTextToClipboard(profile.block);
+    setCopied(true);
+    setMessage(`${profile.label} .env block copied.`);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+
+  async function applyProfile() {
+    if (!profile) return;
+    setError("");
+    setMessage("");
+    try {
+      const payload = (await request("/api/sites/env/apply", {
+        site: site.domain,
+        profile: profile.id,
+        createDatabase: createDatabase && canCreateDatabase
+      })) as { result?: SiteEnvApplyResult };
+      const result = payload.result;
+      setMessage(
+        result?.createdDatabase
+          ? `.env updated and database ${result.createdDatabase} is ready.`
+          : `.env updated at ${result?.envPath ?? envPath}.`
+      );
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    }
+  }
+
+  return (
+    <section className="settings-panel wide-settings-panel env-helper-panel">
+      <SettingsPanelHeader icon={FileText} title="Environment Helper" detail={envPath || "Generate .env values for local services"} />
+      {error ? <div className="notice compact-notice">{error}</div> : null}
+      {message ? <div className="env-helper-message">{message}</div> : null}
+      <div className="env-helper-toolbar">
+        <select value={profile?.id ?? selectedProfile} disabled={loading || !profiles.length} onChange={(event) => setSelectedProfile(event.target.value as SiteEnvProfileKind)}>
+          {profiles.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+        <label className={!canCreateDatabase ? "compact-toggle disabled" : "compact-toggle"}>
+          <input type="checkbox" checked={createDatabase} disabled={!canCreateDatabase} onChange={(event) => setCreateDatabase(event.target.checked)} />
+          <span>Create DB</span>
+        </label>
+        <button disabled={busy || loading || !profile} onClick={() => void copyProfile()}>
+          <Clipboard size={16} />
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+        <button className="primary" disabled={busy || loading || !profile} onClick={() => void applyProfile()}>
+          <Save size={16} />
+          <span>Apply to .env</span>
+        </button>
+      </div>
+      <textarea className="env-helper-block" readOnly value={profile?.block ?? ""} aria-label=".env block" />
+      {profile ? <span className="settings-warning env-helper-detail">{profile.detail}</span> : null}
+    </section>
+  );
+}
+
+function CommandJobPanel({ job }: { job: SiteCommandJob }) {
+  return (
+    <div className={`command-job-panel ${job.status}`}>
+      <div className="runtime-progress-meta">
+        <strong>{job.label} · {statusLabelForJob(job.status)}</strong>
+        <span>{job.message}</span>
+      </div>
+      <div className="progress-track" aria-label={`${job.label} progress`}>
+        <div className="progress-fill" style={{ width: `${Math.max(job.percent, job.status === "running" ? 4 : 0)}%` }} />
+      </div>
+      <div className="command-log">
+        {job.logs.slice(-10).map((line, index) => (
+          <div key={`${line.at}-${index}`} className={`new-site-log-line ${line.level}`}>
+            <span>{new Date(line.at).toLocaleTimeString()}</span>
+            <p>{line.message}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DatabaseTools({
+  summary,
+  request,
+  busy
+}: {
+  summary: DashboardSummary;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  busy: boolean;
+}) {
+  const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
+  const [selected, setSelected] = useState("");
+  const [tables, setTables] = useState<DatabaseTableInfo[]>([]);
+  const [databaseName, setDatabaseName] = useState("app_name");
+  const [importPath, setImportPath] = useState("");
+  const [exportResult, setExportResult] = useState<DatabaseExportResult | null>(null);
+  const [databaseError, setDatabaseError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const selectedDatabase = databases.find((database) => database.name === selected);
+
+  async function loadDatabases() {
+    setLoading(true);
+    try {
+      const payload = await getJson<{ databases: DatabaseInfo[] }>("/api/databases");
+      setDatabases(payload.databases);
+      setSelected((current) => current && payload.databases.some((database) => database.name === current) ? current : payload.databases.find((database) => !database.system)?.name ?? payload.databases[0]?.name ?? "");
+      setDatabaseError("");
+    } catch (error) {
+      setDatabases([]);
+      setTables([]);
+      setDatabaseError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadDatabases();
+  }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setTables([]);
+      return;
+    }
+    let cancelled = false;
+    async function loadTables() {
+      try {
+        const payload = await getJson<{ tables: DatabaseTableInfo[] }>(`/api/databases/tables?database=${encodeURIComponent(selected)}`);
+        if (!cancelled) {
+          setTables(payload.tables);
+          setDatabaseError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTables([]);
+          setDatabaseError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+    void loadTables();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  async function createDatabase() {
+    await request("/api/databases/create", { name: databaseName });
+    setSelected(databaseName);
+    await loadDatabases();
+  }
+
+  async function dropDatabase() {
+    if (!selected || !window.confirm(`Drop database ${selected}?`)) return;
+    await request("/api/databases/drop", { name: selected });
+    setSelected("");
+    await loadDatabases();
+  }
+
+  async function exportSelected() {
+    if (!selected) return;
+    const payload = (await request("/api/databases/export", { name: selected })) as { export?: DatabaseExportResult };
+    setExportResult(payload.export ?? null);
+  }
+
+  async function importSelected() {
+    await request("/api/databases/import", { name: databaseName, path: importPath });
+    setSelected(databaseName);
+    await loadDatabases();
+  }
+
+  return (
+    <div className="tools-grid">
+      <section className="settings-panel">
+        <SettingsPanelHeader icon={Database} title="Databases" detail={`${summary.services.mysql.state} · 127.0.0.1:${summary.config.mysql.port}`} />
+        {databaseError ? <div className="notice compact-notice">{databaseError}</div> : null}
+        <div className="database-list">
+          {databases.map((database) => (
+            <button key={database.name} className={selected === database.name ? "active" : ""} onClick={() => setSelected(database.name)}>
+              <Database size={15} />
+              <span>{database.name}</span>
+              {database.system ? <small>system</small> : null}
+            </button>
+          ))}
+          {!databases.length ? <div className="settings-empty-row">{loading ? "Loading databases..." : "No databases loaded."}</div> : null}
+        </div>
+        <div className="settings-actions">
+          <button disabled={busy || loading} onClick={() => void loadDatabases()}>
+            <RotateCw size={16} />
+            <span>Refresh</span>
+          </button>
+        </div>
+      </section>
+
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader icon={Database} title={selected || "Tables"} detail={selectedDatabase?.system ? "System database" : `${tables.length} tables`} />
+        <div className="database-table-list">
+          {tables.map((table) => (
+            <div key={table.name} className="database-table-row">
+              <strong>{table.name}</strong>
+              <span>{typeof table.rows === "number" ? `${table.rows} rows` : "rows unknown"}</span>
+            </div>
+          ))}
+          {selected && !tables.length ? <div className="settings-empty-row">No tables found.</div> : null}
+        </div>
+        <div className="settings-actions">
+          <button disabled={busy || !selected || selectedDatabase?.system} onClick={() => void exportSelected()}>
+            <Download size={16} />
+            <span>Export SQL</span>
+          </button>
+          <button className="danger-log-button" disabled={busy || !selected || selectedDatabase?.system} onClick={() => void dropDatabase()}>
+            <Trash2 size={16} />
+            <span>Drop</span>
+          </button>
+        </div>
+        {exportResult ? <pre className="snippet compact-snippet">{exportResult.path}</pre> : null}
+      </section>
+
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader icon={FolderPlus} title="Create / Import" detail="Manage local development databases" />
+        <div className="settings-form-grid">
+          <label>
+            <span>Database name</span>
+            <input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} />
+          </label>
+          <label>
+            <span>SQL import path</span>
+            <input value={importPath} onChange={(event) => setImportPath(event.target.value)} placeholder="C:\backup\app.sql" />
+          </label>
+        </div>
+        <div className="settings-actions">
+          <button className="primary" disabled={busy || !databaseName.trim()} onClick={() => void createDatabase()}>
+            <Database size={16} />
+            <span>Create</span>
+          </button>
+          <button disabled={busy || !databaseName.trim() || !importPath.trim()} onClick={() => void importSelected()}>
+            <FileText size={16} />
+            <span>Import SQL</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WorkerTools({
+  site,
+  request,
+  busy
+}: {
+  site: Site;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  busy: boolean;
+}) {
+  const [workers, setWorkers] = useState<SiteWorkerStatus[]>([]);
+  const workerKinds: SiteWorkerKind[] = ["queue", "schedule"];
+
+  async function loadWorkers() {
+    const payload = await getJson<{ workers: SiteWorkerStatus[] }>(`/api/sites/workers?site=${encodeURIComponent(site.domain)}`);
+    setWorkers(payload.workers);
+  }
+
+  useEffect(() => {
+    void loadWorkers();
+    const timer = window.setInterval(() => void loadWorkers(), 1500);
+    return () => window.clearInterval(timer);
+  }, [site.domain]);
+
+  async function setWorker(kind: SiteWorkerKind, action: "start" | "stop") {
+    const payload = (await request(`/api/sites/workers/${action}`, { site: site.domain, kind })) as { worker?: SiteWorkerStatus };
+    if (payload.worker) {
+      setWorkers((current) => [payload.worker!, ...current.filter((worker) => worker.kind !== kind)]);
+    }
+  }
+
+  return (
+    <div className="tools-grid">
+      {workerKinds.map((kind) => {
+        const worker = workers.find((item) => item.kind === kind);
+        const running = worker?.state === "running";
+        return (
+          <section key={kind} className="settings-panel wide-settings-panel">
+            <SettingsPanelHeader icon={kind === "queue" ? ListRestart : RotateCw} title={kind === "queue" ? "Queue Worker" : "Scheduler"} detail={worker?.message ?? "Stopped"} />
+            <ServiceStrip service={{ name: kind, state: running ? "running" : worker?.state === "failed" ? "unknown" : "stopped", pid: worker?.pid, message: worker?.message }} />
+            <div className="settings-actions">
+              <button className="primary" disabled={busy || running} onClick={() => void setWorker(kind, "start")}>
+                <Play size={16} />
+                <span>Start</span>
+              </button>
+              <button disabled={busy || !running} onClick={() => void setWorker(kind, "stop")}>
+                <CircleStop size={16} />
+                <span>Stop</span>
+              </button>
+            </div>
+            <div className="command-log worker-log">
+              {(worker?.logs ?? []).slice(-10).map((line, index) => (
+                <div key={`${line.at}-${index}`} className={`new-site-log-line ${line.level}`}>
+                  <span>{new Date(line.at).toLocaleTimeString()}</span>
+                  <p>{line.message}</p>
+                </div>
+              ))}
+              {!worker?.logs.length ? <div className="settings-empty-row">No worker output yet.</div> : null}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function PortTools({ busy }: { request: (path: string, body?: Record<string, unknown>) => Promise<unknown>; busy: boolean }) {
+  const [ports, setPorts] = useState<PortCheckResult[]>([]);
+  const [portError, setPortError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadPorts() {
+    setLoading(true);
+    try {
+      const payload = await getJson<{ ports: PortCheckResult[] }>("/api/ports/check");
+      setPorts(payload.ports);
+      setPortError("");
+    } catch (error) {
+      setPorts([]);
+      setPortError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadPorts();
+  }, []);
+
+  return (
+    <section className="settings-panel wide-settings-panel">
+      <SettingsPanelHeader icon={Network} title="Port Conflicts" detail={`${ports.filter((port) => port.status === "conflict").length} conflicts`} />
+      {portError ? <div className="notice compact-notice">{portError}</div> : null}
+      <div className="settings-actions">
+        <button disabled={busy || loading} onClick={() => void loadPorts()}>
+          <RotateCw size={16} />
+          <span>Check Ports</span>
+        </button>
+      </div>
+      <div className="port-grid">
+        {ports.map((port) => (
+          <div key={port.id} className={`port-card ${port.status}`}>
+            <Network size={16} />
+            <div>
+              <strong>{port.label}</strong>
+              <span>{port.message}</span>
+              {port.pid ? <small>PID {port.pid}</small> : null}
+            </div>
+            <Badge label={port.status} tone={port.status === "conflict" ? "red" : port.status === "ok" ? "green" : "amber"} />
+          </div>
+        ))}
+        {!ports.length ? <div className="settings-empty-row">{loading ? "Checking ports..." : "No port checks loaded."}</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function UpdateTools({
+  request,
+  startRuntimeInstall,
+  busy
+}: {
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
+  busy: boolean;
+}) {
+  const [updates, setUpdates] = useState<UpdateCenterStatus | null>(null);
+  const [updateError, setUpdateError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadUpdates() {
+    setLoading(true);
+    try {
+      setUpdates(await getJson<UpdateCenterStatus>("/api/updates"));
+      setUpdateError("");
+    } catch (error) {
+      setUpdates(null);
+      setUpdateError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadUpdates();
+  }, []);
+
+  async function runUpdate(item: UpdateCenterStatus["items"][number]) {
+    if (item.kind === "laravel-installer") {
+      await request("/api/laravel-installer/install", {});
+      await loadUpdates();
+      return;
+    }
+    await startRuntimeInstall(item.kind, item.version, item.updateAvailable);
+    await loadUpdates();
+  }
+
+  return (
+    <section className="settings-panel wide-settings-panel">
+      <SettingsPanelHeader icon={PackageCheck} title="Updates Center" detail={updates ? `Checked ${new Date(updates.checkedAt).toLocaleTimeString()}` : "Checking runtimes"} />
+      {updateError ? <div className="notice compact-notice">{updateError}</div> : null}
+      <div className="settings-actions">
+        <button disabled={busy || loading} onClick={() => void loadUpdates()}>
+          <RotateCw size={16} />
+          <span>Refresh</span>
+        </button>
+      </div>
+      <div className="updates-list">
+        {(updates?.items ?? []).map((item) => (
+          <div key={item.id} className="update-row">
+            <PackageCheck size={16} />
+            <div>
+              <strong>{item.name} {item.version}</strong>
+              <span>{item.message ?? (item.installed ? "Installed" : "Not installed")}</span>
+            </div>
+            <Badge label={item.updateAvailable ? "update" : item.installed ? "ready" : "missing"} tone={item.updateAvailable ? "amber" : item.installed ? "green" : "red"} />
+            <button
+              className={!item.installed || item.updateAvailable ? "primary" : ""}
+              disabled={busy || loading || (item.installed && !item.updateAvailable)}
+              onClick={() => void runUpdate(item)}
+            >
+              {item.installed ? <RotateCw size={16} /> : <Download size={16} />}
+              <span>{item.installed ? "Update" : "Install"}</span>
+            </button>
+          </div>
+        ))}
+        {!updates?.items.length ? <div className="settings-empty-row">{loading ? "Checking updates..." : "No update data loaded."}</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function statusLabelForJob(status: SiteCommandJob["status"]): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "complete":
+      return "Complete";
+    case "failed":
+      return "Failed";
+  }
 }
 
 function SettingsView({

@@ -34,7 +34,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -82,7 +83,8 @@ button.primary:hover:not(:disabled) {
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 28px;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -90,6 +92,11 @@ select {
   color: var(--text);
   padding: 0 8px;
   min-width: 0;
+}
+
+textarea {
+  padding: 8px;
+  resize: vertical;
 }
 
 a {
@@ -3274,6 +3281,293 @@ tr:last-child td {
   }
 }
 
+.tools-view {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.tools-tabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.tools-site-picker {
+  grid-template-columns: auto minmax(240px, 420px);
+  align-items: center;
+}
+
+.tools-site-picker .settings-panel-header {
+  min-width: 0;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: minmax(330px, 0.9fr) minmax(420px, 1.1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.tools-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tools-action-grid button {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.compact-notice {
+  padding: 7px 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.env-helper-panel {
+  gap: 8px;
+}
+
+.env-helper-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.env-helper-block {
+  min-height: 154px;
+  width: 100%;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.env-helper-message {
+  border: 1px solid #1f6b54;
+  border-radius: 5px;
+  background: #0f1d1a;
+  color: var(--green);
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+.env-helper-detail {
+  color: var(--muted);
+}
+
+.command-job-panel {
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  background: #10151a;
+  padding: 7px;
+  display: grid;
+  gap: 7px;
+}
+
+.command-job-panel.complete {
+  border-color: #1f6b54;
+}
+
+.command-job-panel.failed {
+  border-color: #704044;
+}
+
+.command-log {
+  max-height: 210px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #0d1216;
+}
+
+.worker-log {
+  min-height: 86px;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.diagnostic-item {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #10151a;
+  padding: 7px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+}
+
+.diagnostic-item.pass svg {
+  color: var(--green);
+}
+
+.diagnostic-item.warn svg {
+  color: var(--amber);
+}
+
+.diagnostic-item.fail svg {
+  color: var(--red);
+}
+
+.diagnostic-item div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.diagnostic-item strong,
+.diagnostic-item span,
+.diagnostic-item small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.diagnostic-item small {
+  color: var(--amber);
+  font-size: 11px;
+}
+
+.database-list {
+  display: grid;
+  gap: 3px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.database-list button {
+  min-width: 0;
+  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.database-list button.active {
+  border-color: #338f82;
+  background: #132c29;
+}
+
+.database-list button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.database-list button small {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.database-table-list {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #10151a;
+}
+
+.database-table-row {
+  min-height: 30px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #202932;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.database-table-row:last-child {
+  border-bottom: 0;
+}
+
+.database-table-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.database-table-row span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.port-grid,
+.updates-list {
+  display: grid;
+  gap: 6px;
+}
+
+.port-card,
+.update-row {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #10151a;
+  padding: 7px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.port-card.ok {
+  border-color: #1f6b54;
+}
+
+.port-card.conflict {
+  border-color: #704044;
+}
+
+.port-card.free {
+  border-color: #5e4728;
+}
+
+.port-card > svg,
+.update-row > svg {
+  color: var(--primary);
+}
+
+.port-card div,
+.update-row div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.port-card strong,
+.port-card span,
+.port-card small,
+.update-row strong,
+.update-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-card span,
+.update-row span,
+.port-card small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .app-shell.rtl {
   direction: rtl;
 }
@@ -3599,10 +3893,19 @@ tr:last-child td {
   .dashboard-action-grid,
   .settings-overview,
   .settings-tabs,
+  .tools-tabs,
+  .tools-grid,
+  .diagnostic-grid,
+  .tools-action-grid,
+  .env-helper-toolbar,
   .settings-grid,
   .settings-form-grid,
   .logs-filterbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tools-site-picker {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .services-workbench {
@@ -3638,5 +3941,21 @@ tr:last-child td {
 
   .site-general-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .tools-tabs,
+  .tools-grid,
+  .diagnostic-grid,
+  .tools-action-grid,
+  .update-row,
+  .port-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .update-row,
+  .port-card {
+    justify-items: start;
   }
 }
