@@ -12,7 +12,6 @@ The project is original open-source software. It is inspired by the broader cate
 
 ![PHP settings](docs/screenshots/php-settings.png)
 
-![SSL actions](docs/screenshots/ssl-actions.png)
 
 ## Features
 
