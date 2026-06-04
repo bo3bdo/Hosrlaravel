@@ -1,10 +1,11 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { updateDotEnvFile } from "./envFile.js";
 import { runCreateDatabase } from "./mysql.js";
 import { findSite, slugify } from "./sites.js";
 import { getMysqlRootPassword } from "./mysql.js";
-import type { Site, SiteEnvApplyResult, SiteEnvProfile, SiteEnvProfileKind } from "./types.js";
+import type { Site, SiteDatabaseInfo, SiteEnvApplyResult, SiteEnvProfile, SiteEnvProfileKind } from "./types.js";
 
 export async function siteEnvProfiles(identifier: string): Promise<{ site: Site; envPath: string; profiles: SiteEnvProfile[] }> {
   const site = await findSite(identifier);
@@ -13,6 +14,63 @@ export async function siteEnvProfiles(identifier: string): Promise<{ site: Site;
     site,
     envPath,
     profiles: await buildSiteEnvProfiles(site)
+  };
+}
+
+export async function siteDatabaseInfo(identifier: string): Promise<SiteDatabaseInfo> {
+  const site = await findSite(identifier);
+  const envPath = path.join(site.path, ".env");
+  const env = await readEnvFile(envPath);
+  const connection = env.DB_CONNECTION?.trim().toLowerCase();
+  const database = env.DB_DATABASE?.trim();
+  const suggestedDatabase = siteDatabaseName(site);
+
+  if (!database) {
+    return {
+      site,
+      envPath,
+      connection,
+      configured: false,
+      supported: true,
+      suggestedDatabase,
+      message: ".env does not define DB_DATABASE yet."
+    };
+  }
+
+  if (connection && connection !== "mysql" && connection !== "mariadb") {
+    return {
+      site,
+      envPath,
+      database,
+      connection,
+      configured: true,
+      supported: false,
+      suggestedDatabase,
+      message: `DB_CONNECTION is ${connection}; local SQL import/export is available for MySQL and MariaDB sites.`
+    };
+  }
+
+  if (!isManagedDatabaseName(database)) {
+    return {
+      site,
+      envPath,
+      database,
+      connection,
+      configured: true,
+      supported: false,
+      suggestedDatabase,
+      message: "DB_DATABASE must contain only letters, numbers, and underscores to manage it here."
+    };
+  }
+
+  return {
+    site,
+    envPath,
+    database,
+    connection,
+    configured: true,
+    supported: true,
+    suggestedDatabase
   };
 }
 
@@ -46,7 +104,7 @@ export async function applySiteEnvProfile(
 
 async function buildSiteEnvProfiles(site: Site): Promise<SiteEnvProfile[]> {
   const config = await loadConfig();
-  const databaseName = slugify(site.name).replace(/-/g, "_");
+  const databaseName = siteDatabaseName(site);
   const mysqlPassword = await getMysqlRootPassword();
   const appValues = {
     APP_URL: site.url
@@ -99,4 +157,35 @@ function profile(id: SiteEnvProfileKind, label: string, detail: string, values: 
 
 function databaseConnection(version: string): string {
   return version.toLowerCase().startsWith("mariadb-") ? "mariadb" : "mysql";
+}
+
+function siteDatabaseName(site: Site): string {
+  return slugify(site.name).replace(/-/g, "_");
+}
+
+async function readEnvFile(envPath: string): Promise<Record<string, string>> {
+  const raw = await readFile(envPath, "utf8").catch(() => "");
+  const values: Record<string, string> = {};
+
+  for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (!match) {
+      continue;
+    }
+    values[match[1]] = unquoteEnvValue(match[2]);
+  }
+
+  return values;
+}
+
+function isManagedDatabaseName(value: string): boolean {
+  return /^[A-Za-z0-9_]+$/.test(value) && !["information_schema", "mysql", "performance_schema", "sys"].includes(value);
+}
+
+function unquoteEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+  return trimmed;
 }

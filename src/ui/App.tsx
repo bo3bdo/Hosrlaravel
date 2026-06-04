@@ -42,7 +42,6 @@ import {
 import type {
   DashboardSummary,
   DatabaseExportResult,
-  DatabaseInfo,
   DatabaseTableInfo,
   LaravelAuthPreset,
   LaravelDatabaseDriver,
@@ -65,6 +64,7 @@ import type {
   Site,
   SiteCreationResult,
   SiteDeletionResult,
+  SiteDatabaseInfo,
   SiteDiagnosticReport,
   SiteEnvApplyResult,
   SiteEnvProfile,
@@ -83,6 +83,7 @@ import { useToasts, showToast } from "./components/useToasts.js";
 
 type Section = "dashboard" | "sites" | "services" | "tools" | "logs" | "settings";
 type ServicesPane = "mysql" | "redis" | "phpmyadmin" | "php" | "nginx" | "all";
+type SiteDetailTab = "general" | "database" | "commands" | "workers" | "information";
 type DatabaseEngine = "mysql" | "mariadb";
 type RuntimeJobMap = Record<string, RuntimeInstallJob>;
 type AppLanguage = "en" | "ar";
@@ -2268,7 +2269,7 @@ function Sites({
 }) {
   const [folder, setFolder] = useState(summary.config.parkedFolders[0] ?? "");
   const [selectedDomain, setSelectedDomain] = useState(summary.sites[0]?.domain ?? "");
-  const [siteTab, setSiteTab] = useState<"general" | "commands" | "workers" | "information">("general");
+  const [siteTab, setSiteTab] = useState<SiteDetailTab>("general");
   const [newSiteOpen, setNewSiteOpen] = useState(false);
   const [siteSearch, setSiteSearch] = useState("");
   const selectedSite = summary.sites.find((site) => site.domain === selectedDomain) ?? summary.sites[0];
@@ -2512,6 +2513,9 @@ function Sites({
               <button role="tab" aria-selected={siteTab === "general"} className={siteTab === "general" ? "active" : ""} onClick={() => setSiteTab("general")}>
                 General
               </button>
+              <button role="tab" aria-selected={siteTab === "database"} className={siteTab === "database" ? "active" : ""} onClick={() => setSiteTab("database")}>
+                Database
+              </button>
               <button role="tab" aria-selected={siteTab === "commands"} className={siteTab === "commands" ? "active" : ""} onClick={() => setSiteTab("commands")}>
                 Commands
               </button>
@@ -2595,6 +2599,10 @@ function Sites({
             ) : siteTab === "commands" ? (
               <div className="site-tab-panel">
                 <ProjectTools site={selectedSite} request={request} busy={busy} />
+              </div>
+            ) : siteTab === "database" ? (
+              <div className="site-tab-panel">
+                <SiteDatabaseTools site={selectedSite} request={request} busy={busy} />
               </div>
             ) : siteTab === "workers" && isLaravelSite ? (
               <div className="site-tab-panel">
@@ -4108,10 +4116,9 @@ function Logs({ summary, post, busy }: ViewProps) {
   );
 }
 
-type ToolsPane = "database" | "ports" | "updates";
+type ToolsPane = "ports" | "updates";
 
 function Tools({
-  summary,
   request,
   startRuntimeInstall,
   busy
@@ -4119,9 +4126,8 @@ function Tools({
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
   startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
 }) {
-  const [pane, setPane] = useState<ToolsPane>("database");
+  const [pane, setPane] = useState<ToolsPane>("ports");
   const panes: Array<{ id: ToolsPane; label: string; detail: string; icon: typeof Globe }> = [
-    { id: "database", label: "Database", detail: "tables, export, import", icon: Database },
     { id: "ports", label: "Ports", detail: "conflicts and suggestions", icon: Network },
     { id: "updates", label: "Updates", detail: "runtimes and Laravel", icon: PackageCheck }
   ];
@@ -4143,9 +4149,198 @@ function Tools({
         })}
       </div>
 
-      {pane === "database" ? <DatabaseTools summary={summary} request={request} busy={busy} /> : null}
       {pane === "ports" ? <PortTools request={request} busy={busy} /> : null}
       {pane === "updates" ? <UpdateTools request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} /> : null}
+    </div>
+  );
+}
+
+function SiteDatabaseTools({
+  site,
+  request,
+  busy
+}: {
+  site: Site;
+  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  busy: boolean;
+}) {
+  const [info, setInfo] = useState<SiteDatabaseInfo | null>(null);
+  const [tables, setTables] = useState<DatabaseTableInfo[]>([]);
+  const [importPath, setImportPath] = useState("");
+  const [exportResult, setExportResult] = useState<DatabaseExportResult | null>(null);
+  const [databaseError, setDatabaseError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const confirm = useDesktopConfirm();
+  const configuredDatabase = info?.supported && info.configured && info.database ? info.database : "";
+  const displayDatabase = configuredDatabase || info?.suggestedDatabase || "";
+
+  async function loadSiteDatabase() {
+    setLoading(true);
+    try {
+      const payload = await getJson<SiteDatabaseInfo>(`/api/sites/database?site=${encodeURIComponent(site.domain)}`);
+      setInfo(payload);
+      setExportResult(null);
+
+      if (payload.supported && payload.configured && payload.database) {
+        try {
+          const tablesPayload = await getJson<{ tables: DatabaseTableInfo[] }>(`/api/databases/tables?database=${encodeURIComponent(payload.database)}`);
+          setTables(tablesPayload.tables);
+          setDatabaseError("");
+        } catch (error) {
+          setTables([]);
+          setDatabaseError(error instanceof Error ? error.message : String(error));
+        }
+      } else {
+        setTables([]);
+        setDatabaseError(payload.message ?? "");
+      }
+    } catch (error) {
+      setInfo(null);
+      setTables([]);
+      setDatabaseError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadSiteDatabase();
+  }, [site.domain]);
+
+  async function applyLocalDatabase() {
+    if (configuredDatabase) {
+      await request("/api/databases/create", { name: configuredDatabase });
+      showToast(`Database ${configuredDatabase} is ready.`, "success");
+    } else {
+      const payload = (await request("/api/sites/env/apply", {
+        site: site.domain,
+        profile: "database",
+        createDatabase: true
+      })) as { result?: SiteEnvApplyResult };
+      if (payload.result?.databaseError) {
+        setDatabaseError(payload.result.databaseError);
+      } else {
+        showToast(`Database settings applied for ${site.domain}.`, "success");
+      }
+    }
+    await loadSiteDatabase();
+  }
+
+  async function exportSelected() {
+    if (!configuredDatabase) return;
+    const payload = (await request("/api/databases/export", { name: configuredDatabase })) as { export?: DatabaseExportResult };
+    setExportResult(payload.export ?? null);
+  }
+
+  async function browseSqlFile() {
+    const payload = (await request("/api/dialog/sql-file", { initialPath: importPath })) as { path?: string | null };
+    if (payload.path) {
+      setImportPath(payload.path);
+    }
+  }
+
+  async function importSelected() {
+    if (!configuredDatabase) return;
+    await request("/api/databases/import", { name: configuredDatabase, path: importPath });
+    await loadSiteDatabase();
+    showToast(`Imported ${pathTail(importPath) || "SQL file"} into ${configuredDatabase}.`, "success");
+  }
+
+  async function dropDatabase() {
+    if (!configuredDatabase) return;
+    const confirmed = await confirm({
+      title: `Drop database ${configuredDatabase}?`,
+      message: "This deletes the local database used by this site.",
+      details: ["Export it first if you need a copy.", `The site's .env will still reference ${configuredDatabase}.`],
+      confirmLabel: "Drop Database",
+      tone: "danger"
+    });
+    if (!confirmed) return;
+    await request("/api/databases/drop", { name: configuredDatabase });
+    await loadSiteDatabase();
+  }
+
+  return (
+    <div className="tools-grid site-database-grid">
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader icon={Database} title={displayDatabase || "Database"} detail={info?.configured ? "From this site's .env" : "Suggested local database"} />
+        {databaseError || info?.message ? <div className="notice compact-notice">{databaseError || info?.message}</div> : null}
+        <dl className="details site-database-details">
+          <dt>Database</dt>
+          <dd>{configuredDatabase || info?.suggestedDatabase || "Unknown"}</dd>
+          <dt>Connection</dt>
+          <dd>{info?.connection || "mysql"}</dd>
+          <dt>.env</dt>
+          <dd>{info?.envPath || "Loading..."}</dd>
+        </dl>
+        <div className="settings-actions">
+          <button disabled={busy || loading} onClick={() => void loadSiteDatabase()}>
+            <RotateCw size={16} />
+            <span>Refresh</span>
+          </button>
+          <button className="primary" disabled={busy || loading || !info?.supported} onClick={() => void applyLocalDatabase()}>
+            <Database size={16} />
+            <span>{configuredDatabase ? "Ensure DB" : "Apply Local DB"}</span>
+          </button>
+        </div>
+      </section>
+
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader icon={Database} title={configuredDatabase || "Tables"} detail={configuredDatabase ? `${tables.length} tables` : "Apply local database first"} />
+        <div className="database-table-list">
+          {tables.map((table) => (
+            <div key={table.name} className="database-table-row">
+              <strong>{table.name}</strong>
+              <span>{typeof table.rows === "number" ? `${table.rows} rows` : "rows unknown"}</span>
+            </div>
+          ))}
+          {configuredDatabase && !tables.length ? <div className="settings-empty-row">{loading ? "Loading tables..." : "No tables found."}</div> : null}
+          {!configuredDatabase ? <div className="settings-empty-row">No managed database is configured for this site.</div> : null}
+        </div>
+        <div className="settings-actions">
+          <button disabled={busy || loading || !configuredDatabase} onClick={() => void exportSelected()}>
+            <Download size={16} />
+            <span>Export SQL</span>
+          </button>
+          <button className="danger-log-button" disabled={busy || loading || !configuredDatabase} onClick={() => void dropDatabase()}>
+            <Trash2 size={16} />
+            <span>Drop</span>
+          </button>
+        </div>
+        {exportResult ? <pre className="snippet compact-snippet">{exportResult.path}</pre> : null}
+      </section>
+
+      <section className="settings-panel wide-settings-panel">
+        <SettingsPanelHeader icon={FolderPlus} title="Import SQL" detail={configuredDatabase ? `Target: ${configuredDatabase}` : "Choose this site's database first"} />
+        <div className="settings-form-grid">
+          <label className="sql-import-target-field">
+            <span>Import target</span>
+            <input readOnly value={configuredDatabase || "Apply local database first"} />
+          </label>
+          <label className="sql-import-path-field">
+            <span>SQL import path</span>
+            <div className="path-picker sql-import-picker">
+              <input value={importPath} onChange={(event) => setImportPath(event.target.value)} placeholder="C:\backup\app.sql" />
+              <button
+                type="button"
+                className="sql-file-picker-button"
+                disabled={busy || loading || !configuredDatabase}
+                onClick={() => void browseSqlFile()}
+                title={configuredDatabase ? `Choose SQL file for ${configuredDatabase}` : "Apply local database first"}
+              >
+                <FolderOpen size={16} />
+                <span>Choose SQL File</span>
+              </button>
+            </div>
+          </label>
+        </div>
+        <div className="settings-actions">
+          <button disabled={busy || loading || !configuredDatabase || !importPath.trim()} onClick={() => void importSelected()}>
+            <FileText size={16} />
+            <span>Import SQL</span>
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -4412,203 +4607,6 @@ function CommandJobPanel({ job }: { job: SiteCommandJob }) {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function DatabaseTools({
-  summary,
-  request,
-  busy
-}: {
-  summary: DashboardSummary;
-  request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
-  busy: boolean;
-}) {
-  const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
-  const [selected, setSelected] = useState("");
-  const [tables, setTables] = useState<DatabaseTableInfo[]>([]);
-  const [databaseName, setDatabaseName] = useState("app_name");
-  const [importPath, setImportPath] = useState("");
-  const [exportResult, setExportResult] = useState<DatabaseExportResult | null>(null);
-  const [databaseError, setDatabaseError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const confirm = useDesktopConfirm();
-  const selectedDatabase = databases.find((database) => database.name === selected);
-
-  async function loadDatabases() {
-    setLoading(true);
-    try {
-      const payload = await getJson<{ databases: DatabaseInfo[] }>("/api/databases");
-      setDatabases(payload.databases);
-      setSelected((current) => current && payload.databases.some((database) => database.name === current) ? current : payload.databases.find((database) => !database.system)?.name ?? payload.databases[0]?.name ?? "");
-      setDatabaseError("");
-    } catch (error) {
-      setDatabases([]);
-      setTables([]);
-      setDatabaseError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadDatabases();
-  }, []);
-
-  useEffect(() => {
-    if (!selected) {
-      setTables([]);
-      return;
-    }
-    let cancelled = false;
-    async function loadTables() {
-      try {
-        const payload = await getJson<{ tables: DatabaseTableInfo[] }>(`/api/databases/tables?database=${encodeURIComponent(selected)}`);
-        if (!cancelled) {
-          setTables(payload.tables);
-          setDatabaseError("");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setTables([]);
-          setDatabaseError(error instanceof Error ? error.message : String(error));
-        }
-      }
-    }
-    void loadTables();
-    return () => {
-      cancelled = true;
-    };
-  }, [selected]);
-
-  async function createDatabase() {
-    await request("/api/databases/create", { name: databaseName });
-    setSelected(databaseName);
-    await loadDatabases();
-  }
-
-  async function dropDatabase() {
-    if (!selected) return;
-    const confirmed = await confirm({
-      title: `Drop database ${selected}?`,
-      message: "This deletes the selected local development database.",
-      details: ["Export the database first if you need to keep a copy.", "This cannot be undone."],
-      confirmLabel: "Drop Database",
-      tone: "danger"
-    });
-    if (!confirmed) return;
-    await request("/api/databases/drop", { name: selected });
-    setSelected("");
-    await loadDatabases();
-  }
-
-  async function exportSelected() {
-    if (!selected) return;
-    const payload = (await request("/api/databases/export", { name: selected })) as { export?: DatabaseExportResult };
-    setExportResult(payload.export ?? null);
-  }
-
-  async function browseSqlFile() {
-    const payload = (await request("/api/dialog/sql-file", { initialPath: importPath })) as { path?: string | null };
-    if (payload.path) {
-      setImportPath(payload.path);
-    }
-  }
-
-  async function importSelected() {
-    if (!selected || selectedDatabase?.system) return;
-    await request("/api/databases/import", { name: selected, path: importPath });
-    await loadDatabases();
-    showToast(`Imported ${pathTail(importPath) || "SQL file"} into ${selected}.`, "success");
-  }
-
-  return (
-    <div className="tools-grid">
-      <section className="settings-panel">
-        <SettingsPanelHeader icon={Database} title="Databases" detail={`${summary.services.mysql.state} · 127.0.0.1:${summary.config.mysql.port}`} />
-        {databaseError ? <div className="notice compact-notice">{databaseError}</div> : null}
-        <div className="database-list">
-          {databases.map((database) => (
-            <button key={database.name} className={selected === database.name ? "active" : ""} onClick={() => setSelected(database.name)}>
-              <Database size={15} />
-              <span>{database.name}</span>
-              {database.system ? <small>system</small> : null}
-            </button>
-          ))}
-          {!databases.length ? <div className="settings-empty-row">{loading ? "Loading databases..." : "No databases loaded."}</div> : null}
-        </div>
-        <div className="settings-actions">
-          <button disabled={busy || loading} onClick={() => void loadDatabases()}>
-            <RotateCw size={16} />
-            <span>Refresh</span>
-          </button>
-        </div>
-      </section>
-
-      <section className="settings-panel wide-settings-panel">
-        <SettingsPanelHeader icon={Database} title={selected || "Tables"} detail={selectedDatabase?.system ? "System database" : `${tables.length} tables`} />
-        <div className="database-table-list">
-          {tables.map((table) => (
-            <div key={table.name} className="database-table-row">
-              <strong>{table.name}</strong>
-              <span>{typeof table.rows === "number" ? `${table.rows} rows` : "rows unknown"}</span>
-            </div>
-          ))}
-          {selected && !tables.length ? <div className="settings-empty-row">No tables found.</div> : null}
-        </div>
-        <div className="settings-actions">
-          <button disabled={busy || !selected || selectedDatabase?.system} onClick={() => void exportSelected()}>
-            <Download size={16} />
-            <span>Export SQL</span>
-          </button>
-          <button className="danger-log-button" disabled={busy || !selected || selectedDatabase?.system} onClick={() => void dropDatabase()}>
-            <Trash2 size={16} />
-            <span>Drop</span>
-          </button>
-        </div>
-        {exportResult ? <pre className="snippet compact-snippet">{exportResult.path}</pre> : null}
-      </section>
-
-      <section className="settings-panel wide-settings-panel">
-        <SettingsPanelHeader icon={FolderPlus} title="Create / Import" detail="Manage local development databases" />
-        <div className="settings-form-grid">
-          <label>
-            <span>New database name</span>
-            <input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} />
-          </label>
-          <label className="sql-import-target-field">
-            <span>Import target</span>
-            <input readOnly value={selectedDatabase?.system ? "Select a user database" : selected || "Select a database"} />
-          </label>
-          <label className="sql-import-path-field">
-            <span>SQL import path</span>
-            <div className="path-picker sql-import-picker">
-              <input value={importPath} onChange={(event) => setImportPath(event.target.value)} placeholder="C:\backup\app.sql" />
-              <button
-                type="button"
-                className="sql-file-picker-button"
-                disabled={busy || !selected || selectedDatabase?.system}
-                onClick={() => void browseSqlFile()}
-                title={selected ? `Choose SQL file for ${selected}` : "Select a database first"}
-              >
-                <FolderOpen size={16} />
-                <span>Choose SQL File</span>
-              </button>
-            </div>
-          </label>
-        </div>
-        <div className="settings-actions">
-          <button className="primary" disabled={busy || !databaseName.trim()} onClick={() => void createDatabase()}>
-            <Database size={16} />
-            <span>Create</span>
-          </button>
-          <button disabled={busy || !selected || selectedDatabase?.system || !importPath.trim()} onClick={() => void importSelected()} title={selected ? `Import SQL into ${selected}` : "Select a database first"}>
-            <FileText size={16} />
-            <span>Import SQL</span>
-          </button>
-        </div>
-      </section>
     </div>
   );
 }

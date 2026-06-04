@@ -3927,7 +3927,7 @@ button.danger-confirm-button:hover:not(:disabled) {
 }
 
 .tools-tabs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .tools-site-picker {
@@ -3994,6 +3994,14 @@ button.danger-confirm-button:hover:not(:disabled) {
 
 .env-helper-detail {
   color: var(--muted);
+}
+
+.site-database-details {
+  padding: 0;
+}
+
+.site-database-details dd {
+  overflow-wrap: anywhere;
 }
 
 .command-job-panel {

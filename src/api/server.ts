@@ -39,7 +39,7 @@ import { getLaravelInstallerStatus, installOrUpdateLaravelInstaller, uninstallLa
 import { clearLogs } from "../core/logging.js";
 import { getStartupStatus, startConfiguredServicesOnLaunch, updateStartupSettings } from "../core/startup.js";
 import { siteCommandDefinitions } from "../core/siteCommands.js";
-import { applySiteEnvProfile, siteEnvProfiles } from "../core/siteEnv.js";
+import { applySiteEnvProfile, siteDatabaseInfo, siteEnvProfiles } from "../core/siteEnv.js";
 import { listDatabases, listDatabaseTables, createManagedDatabase, dropManagedDatabase, exportDatabase, importDatabase } from "../core/databaseManager.js";
 import { checkLaraboxsPorts } from "../core/portTools.js";
 import { getUpdateCenterStatus } from "../core/updateCenter.js";
@@ -240,6 +240,12 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/sites/env") {
       const site = assertString(url.searchParams.get("site"), "site");
       await sendJson(response, await siteEnvProfiles(site));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/sites/database") {
+      const site = assertString(url.searchParams.get("site"), "site");
+      await sendJson(response, await siteDatabaseInfo(site));
       return;
     }
 

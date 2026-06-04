@@ -149,6 +149,17 @@ export interface SiteEnvApplyResult {
   databaseError?: string;
 }
 
+export interface SiteDatabaseInfo {
+  site: Site;
+  envPath: string;
+  database?: string;
+  connection?: string;
+  configured: boolean;
+  supported: boolean;
+  suggestedDatabase: string;
+  message?: string;
+}
+
 export type NewSitePreset = "laravel" | "php" | "static";
 export type LaravelStarterKit = "none" | "react" | "vue" | "svelte" | "livewire";
 export type LaravelAuthPreset = "default" | "none" | "workos";
