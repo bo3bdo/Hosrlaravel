@@ -21,8 +21,9 @@ Get-Process -Name "node" -ErrorAction SilentlyContinue | ForEach-Object {
   }
 
   $normalized = $path.ToLowerInvariant()
+  $repoMarker = $repo.ToLowerInvariant()
   $shouldStop =
-    $normalized -like "*\hosrlaravel\*" -or
+    $normalized -like "*$repoMarker*" -or
     $normalized -like "*\laraboxs\*" -or
     $normalized -eq $resourceNode.ToLowerInvariant() -or
     $normalized -eq $debugNode.ToLowerInvariant() -or
