@@ -4180,11 +4180,12 @@ function EnvHelperPanel({
         createDatabase: createDatabase && canCreateDatabase
       })) as { result?: SiteEnvApplyResult };
       const result = payload.result;
-      setMessage(
-        result?.createdDatabase
-          ? `.env updated and database ${result.createdDatabase} is ready.`
-          : `.env updated at ${result?.envPath ?? envPath}.`
-      );
+      if (result?.databaseError) {
+        setMessage(`.env updated at ${result.envPath}.`);
+        setError(`Database was not created: ${result.databaseError}`);
+        return;
+      }
+      setMessage(result?.createdDatabase ? `.env updated and database ${result.createdDatabase} is ready.` : `.env updated at ${result?.envPath ?? envPath}.`);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
     }

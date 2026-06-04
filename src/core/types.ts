@@ -113,6 +113,7 @@ export interface SiteEnvApplyResult {
   envPath: string;
   profile: SiteEnvProfile;
   createdDatabase?: string;
+  databaseError?: string;
 }
 
 export type NewSitePreset = "laravel" | "php" | "static";

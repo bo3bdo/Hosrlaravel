@@ -135,6 +135,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/phpmyadmin/status") {
+      await writePhpMyAdminConfig();
       await sendJson(response, getPhpMyAdminStatus());
       return;
     }
@@ -440,7 +441,6 @@ const server = http.createServer(async (request, response) => {
         const body = await readJson(request);
         const port = body.port === "auto" ? await findAvailableMysqlPort() : Number(body.port);
         await setMysqlPort(port);
-        await writePhpMyAdminConfig();
         await sendJson(response, { ok: true, summary: await getDashboardSummary() });
         return;
       }

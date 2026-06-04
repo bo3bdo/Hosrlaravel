@@ -30,6 +30,12 @@ const installablePhpExtensions: PhpExtensionPackage[] = [
   { extension: "pdo_sqlsrv", packageVersion: "5.13.0" }
 ];
 
+export async function installDefaultPhpExtensions(phpVersion: string): Promise<PhpExtensionInstallStatus[]> {
+  const statuses = [await installPhpExtension("redis", phpVersion)];
+  await ensurePhpIni(phpVersion);
+  return statuses;
+}
+
 export async function installConfiguredPhpExtensions(phpVersion?: string): Promise<PhpExtensionInstallStatus[]> {
   const config = await loadConfig();
   const versions = phpVersion ? [phpVersion] : config.phpVersions;

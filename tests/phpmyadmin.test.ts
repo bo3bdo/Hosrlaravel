@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { generatePhpMyAdminNginxConfig, getPhpMyAdminStatus, phpMyAdminRoot, phpMyAdminSiteIfInstalled, writePhpMyAdminConfig } from "../src/core/phpmyadmin.js";
+import { setMysqlPort } from "../src/core/mysql.js";
 
 describe("phpMyAdmin integration", () => {
   beforeEach(async () => {
@@ -30,5 +31,16 @@ describe("phpMyAdmin integration", () => {
     expect(nginx).toContain("server_name phpmyadmin.test");
     expect(config).toContain("$cfg['Servers'][$i]['host'] = '127.0.0.1';");
     expect(config).toContain("$cfg['Servers'][$i]['port'] = '3306';");
+  });
+
+  it("keeps phpMyAdmin config synced with the active database port", async () => {
+    await mkdir(phpMyAdminRoot(), { recursive: true });
+    await writeFile(path.join(phpMyAdminRoot(), "index.php"), "<?php echo 'phpMyAdmin';", "utf8");
+
+    await setMysqlPort(3307);
+    const config = await readFile(getPhpMyAdminStatus().configPath, "utf8");
+
+    expect(config).toContain("$cfg['Servers'][$i]['host'] = '127.0.0.1';");
+    expect(config).toContain("$cfg['Servers'][$i]['port'] = '3307';");
   });
 });

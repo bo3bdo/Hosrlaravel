@@ -27,13 +27,16 @@ export async function nodeBinaryForDeveloperTools(): Promise<string> {
   return node.binary;
 }
 
-export async function npmCommandForDeveloperTools(): Promise<string> {
+export async function npmCommandForDeveloperTools(): Promise<{ command: string; args: string[] }> {
   const node = findRuntimeEntry("node");
-  const npm = path.join(node.root, "npm.cmd");
-  if (!existsSync(npm)) {
+  const npmCli = path.join(node.root, "node_modules", "npm", "bin", "npm-cli.js");
+  if (!existsSync(node.binary)) {
+    throw new Error("Node.js runtime is not installed.");
+  }
+  if (!existsSync(npmCli)) {
     throw new Error("npm was not found in the Laraboxs Node.js runtime.");
   }
-  return npm;
+  return { command: node.binary, args: [npmCli] };
 }
 
 export async function composerCommandForDeveloperTools(): Promise<{ command: string; args: string[] }> {
@@ -82,4 +85,3 @@ export function applyLocalDevelopmentInstallEnvironment(env: NodeJS.ProcessEnv):
   delete env.NPM_CONFIG_ONLY;
   delete env.COMPOSER_NO_DEV;
 }
-

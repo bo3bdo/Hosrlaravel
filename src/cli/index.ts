@@ -24,7 +24,7 @@ import { findAvailableRedisPort, getRedisStatus, redisCliCommand, runRedis, setR
 import { loadConfig } from "../core/config.js";
 import { getPaths } from "../core/paths.js";
 import { getRuntimeStatus, installRuntime, uninstallRuntime } from "../core/runtimes.js";
-import { getPhpMyAdminStatus, installPhpMyAdmin } from "../core/phpmyadmin.js";
+import { getPhpMyAdminStatus, installPhpMyAdmin, writePhpMyAdminConfig } from "../core/phpmyadmin.js";
 import { installConfiguredPhpExtensions } from "../core/phpExtensions.js";
 import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
 import { readRecentLogs } from "../core/logging.js";
@@ -265,6 +265,7 @@ async function main(commandName: string, commandArgs: string[]): Promise<number>
     }
 
     case "phpmyadmin:status":
+      await writePhpMyAdminConfig();
       console.log(JSON.stringify(getPhpMyAdminStatus(), null, 2));
       return 0;
 
@@ -394,6 +395,7 @@ async function installPhpMyAdminFromCli(commandArgs: string[]): Promise<number> 
 }
 
 async function openPhpMyAdmin(): Promise<number> {
+  await writePhpMyAdminConfig();
   const status = getPhpMyAdminStatus();
   if (!status.installed) {
     throw new Error("phpMyAdmin is not installed. Run laraboxs phpmyadmin:install first.");

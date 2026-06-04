@@ -261,6 +261,19 @@ export async function installRuntime(kind: RuntimeKind, version?: string, option
   }
 
   await writeRuntimeMarker(entry);
+  if (entry.kind === "php") {
+    report({
+      status: "installing",
+      percent: 97,
+      message: `Installing default PHP extensions for ${entry.name} ${entry.version}.`
+    });
+    const { installDefaultPhpExtensions } = await import("./phpExtensions.js");
+    const statuses = await installDefaultPhpExtensions(entry.version);
+    const failed = statuses.find((status) => !status.installed || !/loaded by PHP/i.test(status.message ?? ""));
+    if (failed) {
+      throw new Error(failed.message ?? `Could not install PHP ${entry.version} extension ${failed.extension}.`);
+    }
+  }
   if (entry.kind === "node" || entry.kind === "composer") {
     await ensureDeveloperCommandPath();
   }

@@ -137,6 +137,7 @@ export async function setMysqlPort(port: number): Promise<void> {
     config.mysql.port = port;
   });
   await ensureMysqlConfigured();
+  await syncPhpMyAdminConfig();
 }
 
 export async function setMysqlVersion(version: string): Promise<void> {
@@ -150,6 +151,7 @@ export async function setMysqlVersion(version: string): Promise<void> {
     config.mysql.version = version;
   });
   await ensureMysqlConfigured();
+  await syncPhpMyAdminConfig();
 }
 
 export async function findAvailableMysqlPort(preferredPort = 3306): Promise<number> {
@@ -206,6 +208,7 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
   }
 
   if (action === "start" && (await getMysqlStatus()).state === "running") {
+    await syncPhpMyAdminConfig();
     return getMysqlStatus("start requested; already running");
   }
 
@@ -258,6 +261,7 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
     try {
       await waitForMysql(15_000);
       await repairRootUserAuthIfNeeded();
+      await syncPhpMyAdminConfig();
     } finally {
       await cleanupMysqlStartupInitFile();
     }
@@ -295,6 +299,13 @@ export async function createDatabase(databaseName: string): Promise<CommandSpec>
 
 export async function runCreateDatabase(databaseName: string): Promise<ServiceStatus> {
   await ensureMysqlConfigured();
+  if ((await getMysqlStatus()).state !== "running") {
+    const status = await runMysql("start");
+    if (status.state !== "running") {
+      throw new Error(status.message ?? `MySQL is not running on 127.0.0.1:${status.port}.`);
+    }
+  }
+
   const command = await createDatabase(databaseName);
   if (isMissingWindowsMysqlBinary(command.command)) {
     const config = await loadConfig();
@@ -304,9 +315,12 @@ export async function runCreateDatabase(databaseName: string): Promise<ServiceSt
     return { name: "mysql", state: "unknown", version: config.mysql.version, port: config.mysql.port, message };
   }
 
-  const code = await runForeground(command);
-  if (code !== 0) {
-    throw new Error(`mysql exited with code ${code}.`);
+  const result = await runCaptured(command);
+  if (result.code !== 0) {
+    const config = await loadConfig();
+    const message = mysqlClientFailureMessage(result.stderr || result.stdout, result.code, config.mysql.port, config.mysql.rootUser);
+    await appendLog("mysql", `create database failed: ${message}`);
+    throw new Error(message);
   }
 
   await appendLog("mysql", `database created: ${validateDatabaseName(databaseName)}`);
@@ -635,6 +649,40 @@ function runForeground(command: CommandSpec): Promise<number> {
   });
 }
 
+function runCaptured(command: CommandSpec): Promise<{ code: number; stdout: string; stderr: string }> {
+  const child = spawn(command.command, command.args, {
+    cwd: command.cwd,
+    env: { ...process.env, ...(command.env ?? {}) },
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+    windowsHide: true
+  });
+
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+function mysqlClientFailureMessage(output: string, code: number, port: number, rootUser: string): string {
+  const detail = output.replace(/\s+/g, " ").trim();
+  if (/Access denied/i.test(detail)) {
+    return `MySQL rejected the stored ${rootUser} password on port ${port}. Stop any other MySQL/MariaDB using this port, then restart Laraboxs MySQL or reset the Laraboxs root password.`;
+  }
+  if (/Can't connect|ERROR 2002|ERROR 2003/i.test(detail)) {
+    return `Could not connect to MySQL on 127.0.0.1:${port}. Start MySQL, or change the MySQL port if another database server is using it.`;
+  }
+  return detail || `mysql exited with code ${code}.`;
+}
+
 function runHidden(command: CommandSpec): Promise<number> {
   const child = spawn(command.command, command.args, {
     cwd: command.cwd,
@@ -684,6 +732,15 @@ async function stopAppLocalMysqlProcesses(): Promise<void> {
     await appendLog("mysql", `fallback process stop exited with code ${code}`);
   } else {
     await appendLog("mysql", "fallback process stop requested for app-local mysqld.exe");
+  }
+}
+
+async function syncPhpMyAdminConfig(): Promise<void> {
+  try {
+    const { writePhpMyAdminConfig } = await import("./phpmyadmin.js");
+    await writePhpMyAdminConfig();
+  } catch (error) {
+    await appendLog("phpmyadmin", `automatic config sync failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

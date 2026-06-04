@@ -27,15 +27,21 @@ export async function applySiteEnvProfile(
     throw new Error(`Unsupported .env profile: ${profileId}`);
   }
 
-  let createdDatabase: string | undefined;
-  if (options.createDatabase && profile.values.DB_DATABASE) {
-    await runCreateDatabase(profile.values.DB_DATABASE);
-    createdDatabase = profile.values.DB_DATABASE;
-  }
-
   const envPath = path.join(site.path, ".env");
   await updateDotEnvFile(envPath, profile.values);
-  return { site, envPath, profile, createdDatabase };
+
+  let createdDatabase: string | undefined;
+  let databaseError: string | undefined;
+  if (options.createDatabase && profile.values.DB_DATABASE) {
+    try {
+      await runCreateDatabase(profile.values.DB_DATABASE);
+      createdDatabase = profile.values.DB_DATABASE;
+    } catch (error) {
+      databaseError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return { site, envPath, profile, createdDatabase, databaseError };
 }
 
 async function buildSiteEnvProfiles(site: Site): Promise<SiteEnvProfile[]> {
@@ -94,4 +100,3 @@ function profile(id: SiteEnvProfileKind, label: string, detail: string, values: 
 function databaseConnection(version: string): string {
   return version.toLowerCase().startsWith("mariadb-") ? "mariadb" : "mysql";
 }
-

@@ -53,22 +53,26 @@ export async function buildSiteCommand(identifier: string, command: SiteCommandK
         env
       };
     }
-    case "npm:install":
+    case "npm:install": {
       assertPackageJson(site.path, command);
+      const npm = await npmCommandForDeveloperTools();
       return {
-        command: await npmCommandForDeveloperTools(),
-        args: ["install"],
+        command: npm.command,
+        args: [...npm.args, "install"],
         cwd: site.path,
         env
       };
-    case "npm:build":
+    }
+    case "npm:build": {
       assertPackageJson(site.path, command);
+      const npm = await npmCommandForDeveloperTools();
       return {
-        command: await npmCommandForDeveloperTools(),
-        args: ["run", "build"],
+        command: npm.command,
+        args: [...npm.args, "run", "build"],
         cwd: site.path,
         env
       };
+    }
   }
 }
 
