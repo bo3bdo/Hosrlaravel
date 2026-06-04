@@ -1,14 +1,33 @@
 {
   "name": "laraboxs-windows",
   "version": "0.1.0",
+  "description": "Windows-first local development manager for PHP and Laravel projects.",
   "private": true,
+  "license": "MIT",
+  "author": "laraboxs contributors",
   "type": "module",
+  "keywords": [
+    "laravel",
+    "php",
+    "windows",
+    "local-development",
+    "nginx",
+    "mysql",
+    "mariadb",
+    "redis",
+    "tauri"
+  ],
+  "os": [
+    "win32"
+  ],
   "bin": {
     "laraboxs": "./dist/cli/index.js"
   },
   "scripts": {
     "api": "tsx src/api/server.ts",
     "build": "tsc -p tsconfig.node.json && vite build",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "clean": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item -Recurse -Force dist,dist-ui,coverage,artifacts -ErrorAction SilentlyContinue; Remove-Item -Force *.tsbuildinfo -ErrorAction SilentlyContinue\"",
     "api:watch": "tsx watch src/api/server.ts",
     "cli": "tsx src/cli/index.ts",
     "cli:watch": "tsx watch src/cli/index.ts",

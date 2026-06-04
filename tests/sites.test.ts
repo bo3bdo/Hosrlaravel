@@ -1,10 +1,13 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { loadConfig } from "../src/core/config.js";
 import { mergeDotEnvContent } from "../src/core/envFile.js";
+import { getPaths } from "../src/core/paths.js";
 import { applyLocalDevelopmentInstallEnvironment, buildLaravelNewArgs, createNewSite } from "../src/core/laravelInstaller.js";
-import { addParkedFolder, discoverSites, isolateSite, setGlobalPhpVersion, setSiteEntryPath } from "../src/core/sites.js";
+import { secureSite } from "../src/core/ssl.js";
+import { addParkedFolder, deleteSite, discoverSites, isolateSite, setGlobalPhpVersion, setSiteEntryPath } from "../src/core/sites.js";
 
 describe("site discovery", () => {
   let tempHome: string;
@@ -53,6 +56,33 @@ describe("site discovery", () => {
 
     expect(site?.entryPath).toBe("web");
     expect(site?.documentRoot.endsWith(path.join("plain-php", "web"))).toBe(true);
+  });
+
+  it("deletes a parked site folder and cleans site settings", async () => {
+    await addParkedFolder(parked);
+    await isolateSite("laravel-app.test", "8.4");
+    await setSiteEntryPath("laravel-app.test", "public");
+    await secureSite("laravel-app.test");
+
+    const certPath = path.join(getPaths().certs, "laravel-app.test.crt");
+    await stat(certPath);
+
+    const result = await deleteSite("laravel-app.test", { deleteDatabases: false });
+    const config = await loadConfig();
+    const sites = await discoverSites();
+
+    expect(result.deletedPath).toBe(path.join(parked, "laravel-app"));
+    expect(sites.map((site) => site.domain)).toEqual(["plain-php.test", "static-site.test"]);
+    await expect(stat(path.join(parked, "laravel-app"))).rejects.toThrow();
+    await expect(stat(certPath)).rejects.toThrow();
+    expect(config.isolatedPhp["laravel-app.test"]).toBeUndefined();
+    expect(config.siteEntryPaths["laravel-app.test"]).toBeUndefined();
+    expect(config.securedDomains).not.toContain("laravel-app.test");
+  });
+
+  it("refuses to delete folders outside direct parked sites", async () => {
+    await addParkedFolder(path.join(parked, "laravel-app"));
+    await expect(deleteSite("public.test", { deleteDatabases: false })).rejects.toThrow(/project root/i);
   });
 
   it("creates a plain PHP site inside a parked folder", async () => {

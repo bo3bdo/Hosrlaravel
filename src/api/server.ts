@@ -4,12 +4,11 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, updateConfig } from "../core/config.js";
-import { addParkedFolder, isolateSite, resetSiteEntryPath, setConfiguredPhpVersions, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
+import { addParkedFolder, deleteSite, isolateSite, resetSiteEntryPath, setConfiguredPhpVersions, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
 import { syncHostsFile } from "../core/hosts.js";
 import {
   findAvailableMysqlPort,
   getMysqlRootPassword,
-  getMysqlStatus,
   ensureMysqlConfigured,
   initializeMysqlDataDir,
   laravelEnv,
@@ -29,7 +28,7 @@ import { getPhpMyAdminStatus, installPhpMyAdmin, writePhpMyAdminConfig } from ".
 import { findAvailableRedisPort, openRedisCli, runRedis, setRedisPort } from "../core/redis.js";
 import { ensureDeveloperCommandPath, uninstallRuntime } from "../core/runtimes.js";
 import { getRuntimeInstallJob, listRuntimeInstallJobs, startRuntimeInstallJob } from "./runtimeJobs.js";
-import { selectFolder } from "./dialogs.js";
+import { selectFile, selectFolder, sqlFileDialogOptions } from "./dialogs.js";
 import { getLocalCaStatus, secureSite, trustLocalCa, unsecureSite } from "../core/ssl.js";
 import { tryEnsureWindowsDefenderExclusion } from "../core/defender.js";
 import { getDashboardSummary } from "../core/summary.js";
@@ -47,7 +46,7 @@ import { getUpdateCenterStatus } from "../core/updateCenter.js";
 import type { NewSiteRequest, RuntimeKind, ServiceAction, SiteCommandKind, SiteEnvProfileKind, SiteWorkerKind } from "../core/types.js";
 import { getSiteCreationJob, startSiteCreationJob } from "./siteJobs.js";
 import { getSiteCommandJob, listSiteCommandJobs, startSiteCommandJob } from "./siteCommandJobs.js";
-import { listSiteWorkers, startSiteWorker, stopSiteWorker } from "./siteWorkers.js";
+import { listSiteWorkers, startSiteWorker, stopAllSiteWorkers, stopSiteWorker, stopSiteWorkers } from "./siteWorkers.js";
 import { ApiHttpError, apiSecurityHeaders, assertTrustedApiRequest, corsOrigin, maxJsonBodyBytes, statusForError } from "./httpSecurity.js";
 
 const host = "127.0.0.1";
@@ -175,6 +174,20 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/sites/delete") {
+      const body = await readJson(request);
+      const site = assertString(body.site, "site");
+      await stopSiteWorkers(site);
+      const result = await deleteSite(site, { deleteDatabases: body.deleteDatabases !== false });
+      await writeNginxConfigs();
+      await syncHostsFile();
+      if (getNginxStatus().state === "running") {
+        await runNginx("restart");
+      }
+      await sendJson(response, { ok: true, result, summary: await getDashboardSummary() });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname.startsWith("/api/sites/create/jobs/")) {
       const jobId = decodeURIComponent(url.pathname.slice("/api/sites/create/jobs/".length));
       const job = getSiteCreationJob(jobId);
@@ -295,6 +308,17 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const selectedPath = await selectFolder({ initialPath: typeof body.initialPath === "string" ? body.initialPath : undefined });
+      await sendJson(response, { ok: true, path: selectedPath });
+      return;
+    }
+
+    if (request.method === "POST" && (url.pathname === "/api/dialog/sql-file" || url.pathname === "/api/dialogs/sql-file")) {
+      const body = await readJson(request);
+      if (body.probe === true) {
+        await sendJson(response, { ok: true, available: true });
+        return;
+      }
+      const selectedPath = await selectFile(sqlFileDialogOptions(typeof body.initialPath === "string" ? body.initialPath : undefined));
       await sendJson(response, { ok: true, path: selectedPath });
       return;
     }
@@ -686,28 +710,35 @@ async function gracefulShutdown(signal: string): Promise<void> {
   console.log(`Received ${signal}. Stopping services...`);
 
   try {
-    if (getNginxStatus().state === "running") {
-      console.log("Stopping Nginx...");
-      await runNginx("stop");
-    }
+    await stopAllSiteWorkers();
   } catch {
     // Ignore errors during shutdown.
   }
 
   try {
-    if ((await getPhpFastCgiStatus()).state === "running") {
-      console.log("Stopping PHP FastCGI...");
-      await runPhpFastCgi("stop");
-    }
+    console.log("Stopping Nginx...");
+    await runNginx("stop");
   } catch {
     // Ignore errors during shutdown.
   }
 
   try {
-    if ((await getMysqlStatus()).state === "running") {
-      console.log("Stopping MySQL...");
-      await runMysql("stop");
-    }
+    console.log("Stopping PHP FastCGI...");
+    await runPhpFastCgi("stop");
+  } catch {
+    // Ignore errors during shutdown.
+  }
+
+  try {
+    console.log("Stopping MySQL...");
+    await runMysql("stop");
+  } catch {
+    // Ignore errors during shutdown.
+  }
+
+  try {
+    console.log("Stopping Redis...");
+    await runRedis("stop");
   } catch {
     // Ignore errors during shutdown.
   }

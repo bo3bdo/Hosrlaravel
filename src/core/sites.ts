@@ -1,9 +1,15 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, updateConfig } from "./config.js";
+import { dropManagedDatabase } from "./databaseManager.js";
 import { tryEnsureWindowsDefenderExclusion } from "./defender.js";
-import type { Framework, LaraboxsConfig, Site } from "./types.js";
+import { appendLog } from "./logging.js";
+import { getMysqlStatus, runMysql } from "./mysql.js";
+import { getPaths } from "./paths.js";
+import type { Framework, LaraboxsConfig, Site, SiteDeletionResult } from "./types.js";
+
+const systemDatabases = new Set(["information_schema", "mysql", "performance_schema", "sys"]);
 
 export async function addParkedFolder(folder: string, options: { defenderExclusion?: boolean } = {}): Promise<LaraboxsConfig> {
   const resolved = path.resolve(folder);
@@ -84,6 +90,54 @@ export async function resetSiteEntryPath(identifier: string): Promise<LaraboxsCo
   return updateConfig((config) => {
     delete config.siteEntryPaths[site.domain];
   });
+}
+
+export async function deleteSite(
+  identifier: string,
+  options: { deleteDatabases?: boolean } = {}
+): Promise<SiteDeletionResult> {
+  const config = await loadConfig();
+  const site = await findSite(identifier);
+  const sitePath = assertDeletableSitePath(site, config);
+  const databaseCandidates = await databaseNamesForSite(site);
+  const deleteDatabases = options.deleteDatabases !== false;
+  const deletedDatabases: string[] = [];
+  const skippedDatabases = databaseCandidates
+    .filter((database) => !database.drop)
+    .map((database) => database.name);
+
+  if (deleteDatabases) {
+    const droppableDatabases = databaseCandidates.filter((candidate) => candidate.drop);
+    if (droppableDatabases.length && (await getMysqlStatus()).state !== "running") {
+      const status = await runMysql("start");
+      if (status.state !== "running") {
+        throw new Error(status.message ?? "Could not start MySQL to delete the site's database.");
+      }
+    }
+
+    for (const database of droppableDatabases) {
+      await dropManagedDatabase(database.name);
+      deletedDatabases.push(database.name);
+    }
+  } else {
+    skippedDatabases.push(...databaseCandidates.filter((candidate) => candidate.drop).map((database) => database.name));
+  }
+
+  await rm(sitePath, { recursive: true, force: true });
+  await updateConfig((next) => {
+    delete next.isolatedPhp[site.domain];
+    delete next.siteEntryPaths[site.domain];
+    next.securedDomains = next.securedDomains.filter((domain) => domain !== site.domain);
+  });
+  await removeSiteArtifacts(site);
+  await appendLog("site", `deleted site ${site.domain} at ${sitePath}`);
+
+  return {
+    site,
+    deletedPath: sitePath,
+    deletedDatabases,
+    skippedDatabases: Array.from(new Set(skippedDatabases)).sort()
+  };
 }
 
 export async function setSiteSecurity(identifier: string, secured: boolean): Promise<LaraboxsConfig> {
@@ -277,4 +331,100 @@ function normalizeSiteEntryPath(entryPath: string): string {
 
 function normalizePathForCompare(value: string): string {
   return process.platform === "win32" ? value.toLowerCase() : value;
+}
+
+function assertDeletableSitePath(site: Site, config: LaraboxsConfig): string {
+  const sitePath = path.resolve(site.path);
+  const parent = path.dirname(sitePath);
+  const parkedFolder = config.parkedFolders.find((folder) => normalizePathForCompare(path.resolve(folder)) === normalizePathForCompare(parent));
+
+  if (!parkedFolder) {
+    throw new Error(`Refusing to delete ${sitePath}. Site folders can only be deleted from a configured parked folder.`);
+  }
+
+  if (normalizePathForCompare(path.resolve(parkedFolder)) === normalizePathForCompare(sitePath)) {
+    throw new Error(`Refusing to delete parked folder root: ${sitePath}`);
+  }
+
+  if (parkedFolderLooksLikeProjectRoot(parkedFolder)) {
+    throw new Error(`Refusing to delete ${sitePath}. The parked folder itself looks like a project root; park its parent folder before deleting sites.`);
+  }
+
+  return sitePath;
+}
+
+function parkedFolderLooksLikeProjectRoot(parkedFolder: string): boolean {
+  return [
+    path.join(parkedFolder, "artisan"),
+    path.join(parkedFolder, "composer.json"),
+    path.join(parkedFolder, "index.php"),
+    path.join(parkedFolder, "public", "index.php")
+  ].some((filePath) => existsSync(filePath));
+}
+
+async function databaseNamesForSite(site: Site): Promise<Array<{ name: string; drop: boolean }>> {
+  const names = new Set<string>();
+  const skipped = new Set<string>();
+  const env = await readSiteEnv(site);
+  const connection = env.DB_CONNECTION?.trim().toLowerCase();
+
+  if (!connection || connection === "mysql" || connection === "mariadb") {
+    addDatabaseCandidate(env.DB_DATABASE, names, skipped);
+  }
+
+  return [
+    ...Array.from(names).map((name) => ({ name, drop: true })),
+    ...Array.from(skipped).map((name) => ({ name, drop: false }))
+  ];
+}
+
+async function readSiteEnv(site: Site): Promise<Record<string, string>> {
+  const envPath = path.join(site.path, ".env");
+  const raw = await readFile(envPath, "utf8").catch(() => "");
+  const values: Record<string, string> = {};
+
+  for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (!match) {
+      continue;
+    }
+    values[match[1]] = unquoteEnvValue(match[2]);
+  }
+
+  return values;
+}
+
+function addDatabaseCandidate(value: string | undefined, names: Set<string>, skipped: Set<string>): void {
+  const name = value?.trim();
+  if (!name) {
+    return;
+  }
+
+  if (!/^[A-Za-z0-9_]+$/.test(name) || systemDatabases.has(name)) {
+    skipped.add(name);
+    return;
+  }
+
+  names.add(name);
+}
+
+function unquoteEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+  return trimmed;
+}
+
+async function removeSiteArtifacts(site: Site): Promise<void> {
+  const paths = getPaths();
+  await Promise.all([
+    rm(path.join(paths.certs, `${site.domain}.crt`), { force: true }),
+    rm(path.join(paths.certs, `${site.domain}.key`), { force: true }),
+    rm(path.join(paths.home, "previews", `${safePreviewName(site.domain)}.png`), { force: true })
+  ]);
+}
+
+function safePreviewName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9.-]+/g, "-").replace(/^-+|-+$/g, "") || "site";
 }

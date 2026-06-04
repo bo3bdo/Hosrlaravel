@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BadgeCheck,
@@ -64,6 +64,7 @@ import type {
   SiteCreationJob,
   Site,
   SiteCreationResult,
+  SiteDeletionResult,
   SiteDiagnosticReport,
   SiteEnvApplyResult,
   SiteEnvProfile,
@@ -95,6 +96,18 @@ type WizardTaskDefinition = {
   optional?: boolean;
   runtime?: { kind: RuntimeKind; version?: string };
 };
+type DesktopConfirmTone = "default" | "warning" | "danger";
+type DesktopConfirmOptions = {
+  title: string;
+  message?: string;
+  details?: string[];
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: DesktopConfirmTone;
+};
+type DesktopConfirmFn = (options: DesktopConfirmOptions) => Promise<boolean>;
+
+const DesktopConfirmContext = createContext<DesktopConfirmFn | null>(null);
 
 const sections: Array<{ id: Section; label: string; labelAr: string; icon: typeof Globe }> = [
   { id: "dashboard", label: "Dashboard", labelAr: "لوحة التحكم", icon: LayoutDashboard },
@@ -152,6 +165,14 @@ function serviceBadgeForSection(sectionId: Section, summary: DashboardSummary): 
   return null;
 }
 
+function useDesktopConfirm(): DesktopConfirmFn {
+  const confirm = useContext(DesktopConfirmContext);
+  if (!confirm) {
+    throw new Error("Desktop confirm dialog is not available.");
+  }
+  return confirm;
+}
+
 export default function App() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [section, setSection] = useState<Section>("dashboard");
@@ -159,7 +180,29 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installJobs, setInstallJobs] = useState<RuntimeJobMap>({});
+  const [confirmDialog, setConfirmDialog] = useState<DesktopConfirmOptions | null>(null);
+  const pendingConfirm = useRef<((confirmed: boolean) => void) | null>(null);
   const { toasts, addToast, removeToast } = useToasts();
+
+  const confirmAction = useCallback<DesktopConfirmFn>((options) => {
+    return new Promise((resolve) => {
+      pendingConfirm.current?.(false);
+      pendingConfirm.current = resolve;
+      setConfirmDialog({
+        cancelLabel: "Cancel",
+        confirmLabel: "Continue",
+        tone: "default",
+        ...options
+      });
+    });
+  }, []);
+
+  const settleConfirm = useCallback((confirmed: boolean) => {
+    const resolve = pendingConfirm.current;
+    pendingConfirm.current = null;
+    setConfirmDialog(null);
+    resolve?.(confirmed);
+  }, []);
 
   async function refresh() {
     try {
@@ -297,6 +340,7 @@ export default function App() {
   }
 
   return (
+    <DesktopConfirmContext.Provider value={confirmAction}>
     <div className={`app-shell ${language === "ar" ? "rtl" : ""}`} dir={language === "ar" ? "rtl" : "ltr"}>
       <aside className="sidebar">
         <div className="brand">
@@ -403,7 +447,9 @@ export default function App() {
       </div>
 
       <ToastContainer toasts={toasts} removeToast={removeToast} language={language} />
+      {confirmDialog ? <DesktopConfirmDialog options={confirmDialog} onResolve={settleConfirm} /> : null}
     </div>
+    </DesktopConfirmContext.Provider>
   );
 }
 
@@ -436,6 +482,57 @@ function BootScreen({ error, busy, refresh }: { error: string | null; busy: bool
           <span>Retry</span>
         </button>
       </div>
+    </div>
+  );
+}
+
+function DesktopConfirmDialog({ options, onResolve }: { options: DesktopConfirmOptions; onResolve: (confirmed: boolean) => void }) {
+  const tone = options.tone ?? "default";
+  const confirmLabel = options.confirmLabel ?? "Continue";
+  const cancelLabel = options.cancelLabel ?? "Cancel";
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onResolve(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onResolve]);
+
+  return (
+    <div className="desktop-confirm-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onResolve(false)}>
+      <section className={`desktop-confirm-panel ${tone}`} role="alertdialog" aria-modal="true" aria-labelledby="desktop-confirm-title">
+        <div className="desktop-confirm-header">
+          <div className={`desktop-confirm-icon ${tone}`}>
+            {tone === "danger" ? <Trash2 size={20} /> : tone === "warning" ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}
+          </div>
+          <div>
+            <strong id="desktop-confirm-title">{options.title}</strong>
+            {options.message ? <span>{options.message}</span> : null}
+          </div>
+        </div>
+        {options.details?.length ? (
+          <div className="desktop-confirm-details">
+            {options.details.map((detail) => (
+              <p key={detail}>{detail}</p>
+            ))}
+          </div>
+        ) : null}
+        <div className="desktop-confirm-actions">
+          <button onClick={() => onResolve(false)}>
+            <X size={16} />
+            <span>{cancelLabel}</span>
+          </button>
+          <button className={tone === "danger" ? "danger-confirm-button" : "primary"} onClick={() => onResolve(true)}>
+            {tone === "danger" ? <Trash2 size={16} /> : <BadgeCheck size={16} />}
+            <span>{confirmLabel}</span>
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1322,6 +1419,7 @@ function Services({
   const [phpIniPath, setPhpIniPath] = useState("");
   const [phpSettingsLoading, setPhpSettingsLoading] = useState(false);
   const [phpSettingsSaving, setPhpSettingsSaving] = useState(false);
+  const confirm = useDesktopConfirm();
   const jobs = Object.values(installJobs);
   const phpRuntime = summary.runtimes.php.find((runtime) => runtime.version === phpVersion) ?? summary.runtimes.php[0];
   const mysqlRuntime = summary.runtimes.mysql.find((runtime) => runtime.version === mysqlVersion) ?? summary.runtimes.mysql[0];
@@ -1420,7 +1518,14 @@ function Services({
   }
 
   async function resetRootPassword() {
-    if (!window.confirm(`Reset ${activeDatabaseName} root password?`)) {
+    const confirmed = await confirm({
+      title: `Reset ${activeDatabaseName} root password?`,
+      message: "Laraboxs will generate and store a new local root password.",
+      details: [`Runtime: ${activeDatabaseLabel}`, "Use this only when the database service is running and you are ready to update local connection settings."],
+      confirmLabel: "Reset Password",
+      tone: "warning"
+    });
+    if (!confirmed) {
       return;
     }
     const payload = (await request("/api/mysql/reset-password")) as { password?: string };
@@ -2012,14 +2117,19 @@ function RuntimePanel({
   uninstall: (kind: RuntimeKind, version?: string) => Promise<void>;
 }) {
   const jobs = Object.values(installJobs);
+  const confirm = useDesktopConfirm();
 
   async function removeInstalledRuntime(item: RuntimeInstallStatus) {
     const displayVersion = runtimeDisplayVersion(item);
-    const warning =
-      kind === "mysql"
-        ? `Remove ${displayVersion}? This deletes the app-local ${item.name} runtime folder, including local database data. Stop the database first.`
-        : `Remove ${item.name} ${displayVersion}?`;
-    if (!window.confirm(warning)) {
+    const isDatabase = kind === "mysql";
+    const confirmed = await confirm({
+      title: isDatabase ? `Remove ${displayVersion}?` : `Remove ${item.name} ${displayVersion}?`,
+      message: isDatabase ? "This deletes the app-local database runtime folder, including local database data." : "This deletes the app-local runtime folder.",
+      details: isDatabase ? [`Runtime: ${item.name}`, "Stop the database service first to avoid file locks or partial removal."] : [`Runtime: ${item.name}`],
+      confirmLabel: "Remove Runtime",
+      tone: "danger"
+    });
+    if (!confirmed) {
       return;
     }
     await uninstall(kind, item.version);
@@ -2082,6 +2192,7 @@ function DatabaseRuntimePanel({
 }) {
   const [version, setVersion] = useState(preferredDatabaseRuntime(items)?.version ?? items[0]?.version ?? "");
   const jobs = Object.values(installJobs);
+  const confirm = useDesktopConfirm();
   const selected = items.find((item) => item.version === version) ?? preferredDatabaseRuntime(items) ?? items[0];
   const job = selected ? latestRuntimeJob(jobs, "mysql", selected.version) : undefined;
   const activeJob = job ? isActiveRuntimeJob(job) : false;
@@ -2098,7 +2209,14 @@ function DatabaseRuntimePanel({
       return;
     }
     const displayVersion = runtimeDisplayVersion(selected);
-    if (!window.confirm(`Remove ${displayVersion}? This deletes the app-local ${selected.name} runtime folder, including local database data. Stop the database first.`)) {
+    const confirmed = await confirm({
+      title: `Remove ${displayVersion}?`,
+      message: `This deletes the app-local ${selected.name} runtime folder, including local database data.`,
+      details: ["Stop the database service first to avoid file locks or partial removal."],
+      confirmLabel: "Remove Runtime",
+      tone: "danger"
+    });
+    if (!confirmed) {
       return;
     }
     await uninstall("mysql", selected.version);
@@ -2159,6 +2277,7 @@ function Sites({
   const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
   const [siteHealth, setSiteHealth] = useState<SiteHealthStatus | null>(null);
   const [siteHealthLoading, setSiteHealthLoading] = useState(false);
+  const confirm = useDesktopConfirm();
 
   const filteredSites = summary.sites.filter((site) => {
     const query = siteSearch.trim().toLowerCase();
@@ -2262,6 +2381,36 @@ function Sites({
     await post("/api/php/isolate", { site: selectedSite.domain, version: sitePhpVersion });
   }
 
+  async function deleteSelectedSite() {
+    if (!selectedSite) {
+      return;
+    }
+
+    const confirmed = await confirm({
+      title: `Delete ${selectedSite.domain}?`,
+      message: "This removes the project folder and can also drop the local database listed in the site's .env file.",
+      details: [`Project folder: ${selectedSite.path}`, "This cannot be undone."],
+      confirmLabel: "Delete Site",
+      tone: "danger"
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    const nextDomain = summary.sites.find((site) => site.domain !== selectedSite.domain)?.domain ?? "";
+    const payload = (await request("/api/sites/delete", { site: selectedSite.domain, deleteDatabases: true })) as {
+      result?: SiteDeletionResult;
+    };
+    setSelectedDomain(nextDomain);
+    setSiteTab("general");
+
+    const deletedDatabases = payload.result?.deletedDatabases ?? [];
+    const skippedDatabases = payload.result?.skippedDatabases ?? [];
+    const databaseMessage = deletedDatabases.length ? ` Dropped database ${deletedDatabases.join(", ")}.` : "";
+    const skippedMessage = skippedDatabases.length ? ` Skipped database ${skippedDatabases.join(", ")}.` : "";
+    showToast(`Deleted ${selectedSite.domain}.${databaseMessage}${skippedMessage}`, "success");
+  }
+
   return (
     <>
       <div className="toolbar">
@@ -2347,10 +2496,16 @@ function Sites({
                   </span>
                 </div>
               </div>
-              <button className={selectedSite.secured ? "" : "primary"} disabled={busy || (selectedSite.secured && !summary.ssl.trusted)} onClick={() => void post(selectedSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: selectedSite.domain })}>
-                {selectedSite.secured ? <Lock size={18} /> : <LockOpen size={18} />}
-                <span>{selectedSite.secured ? "Disable SSL" : "Enable SSL"}</span>
-              </button>
+              <div className="site-header-actions">
+                <button className={selectedSite.secured ? "" : "primary"} disabled={busy || (selectedSite.secured && !summary.ssl.trusted)} onClick={() => void post(selectedSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: selectedSite.domain })}>
+                  {selectedSite.secured ? <Lock size={18} /> : <LockOpen size={18} />}
+                  <span>{selectedSite.secured ? "Disable SSL" : "Enable SSL"}</span>
+                </button>
+                <button className="danger-site-button" disabled={busy} onClick={() => void deleteSelectedSite()} title="Delete site">
+                  <Trash2 size={18} />
+                  <span>Delete Site</span>
+                </button>
+              </div>
             </div>
 
             <div className="site-detail-tabs" role="tablist" aria-label="Site sections">
@@ -3561,6 +3716,7 @@ function Mysql({
   const installJob = selectedRuntime ? latestRuntimeJob(Object.values(installJobs), "mysql", selectedRuntime.version) : undefined;
   const installing = installJob ? isActiveRuntimeJob(installJob) : false;
   const showInstallProgress = installJob ? installing || installJob.status === "failed" : false;
+  const confirm = useDesktopConfirm();
 
   useEffect(() => {
     setPort(String(summary.config.mysql.port));
@@ -3579,7 +3735,14 @@ function Mysql({
   }
 
   async function resetRootPassword() {
-    if (!window.confirm(`Reset ${activeDatabaseName} root password?`)) {
+    const confirmed = await confirm({
+      title: `Reset ${activeDatabaseName} root password?`,
+      message: "Laraboxs will generate and store a new local root password.",
+      details: [`Runtime: ${activeDatabaseLabel}`, "Use this only when the database service is running and you are ready to update local connection settings."],
+      confirmLabel: "Reset Password",
+      tone: "warning"
+    });
+    if (!confirmed) {
       return;
     }
     const payload = (await request("/api/mysql/reset-password")) as { password?: string };
@@ -3843,6 +4006,7 @@ function Logs({ summary, post, busy }: ViewProps) {
   const [serviceFilter, setServiceFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState<"all" | LogSeverity>("all");
   const [latestFirst, setLatestFirst] = useState(false);
+  const confirm = useDesktopConfirm();
   const services = Array.from(new Set(summary.logs.map(logService))).sort();
   const filteredLogs = summary.logs.filter((line) => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -3870,7 +4034,14 @@ function Logs({ summary, post, busy }: ViewProps) {
   }
 
   async function clearAllLogs() {
-    if (!window.confirm("Clear all Laraboxs logs?")) {
+    const confirmed = await confirm({
+      title: "Clear all Laraboxs logs?",
+      message: "This removes the runtime log entries shown in the dashboard.",
+      details: ["The action does not delete projects or runtime installations."],
+      confirmLabel: "Clear Logs",
+      tone: "warning"
+    });
+    if (!confirmed) {
       return;
     }
     await post("/api/logs/clear");
@@ -4262,6 +4433,7 @@ function DatabaseTools({
   const [exportResult, setExportResult] = useState<DatabaseExportResult | null>(null);
   const [databaseError, setDatabaseError] = useState("");
   const [loading, setLoading] = useState(false);
+  const confirm = useDesktopConfirm();
   const selectedDatabase = databases.find((database) => database.name === selected);
 
   async function loadDatabases() {
@@ -4317,7 +4489,15 @@ function DatabaseTools({
   }
 
   async function dropDatabase() {
-    if (!selected || !window.confirm(`Drop database ${selected}?`)) return;
+    if (!selected) return;
+    const confirmed = await confirm({
+      title: `Drop database ${selected}?`,
+      message: "This deletes the selected local development database.",
+      details: ["Export the database first if you need to keep a copy.", "This cannot be undone."],
+      confirmLabel: "Drop Database",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     await request("/api/databases/drop", { name: selected });
     setSelected("");
     await loadDatabases();
@@ -4329,10 +4509,18 @@ function DatabaseTools({
     setExportResult(payload.export ?? null);
   }
 
+  async function browseSqlFile() {
+    const payload = (await request("/api/dialog/sql-file", { initialPath: importPath })) as { path?: string | null };
+    if (payload.path) {
+      setImportPath(payload.path);
+    }
+  }
+
   async function importSelected() {
-    await request("/api/databases/import", { name: databaseName, path: importPath });
-    setSelected(databaseName);
+    if (!selected || selectedDatabase?.system) return;
+    await request("/api/databases/import", { name: selected, path: importPath });
     await loadDatabases();
+    showToast(`Imported ${pathTail(importPath) || "SQL file"} into ${selected}.`, "success");
   }
 
   return (
@@ -4386,12 +4574,28 @@ function DatabaseTools({
         <SettingsPanelHeader icon={FolderPlus} title="Create / Import" detail="Manage local development databases" />
         <div className="settings-form-grid">
           <label>
-            <span>Database name</span>
+            <span>New database name</span>
             <input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} />
           </label>
-          <label>
+          <label className="sql-import-target-field">
+            <span>Import target</span>
+            <input readOnly value={selectedDatabase?.system ? "Select a user database" : selected || "Select a database"} />
+          </label>
+          <label className="sql-import-path-field">
             <span>SQL import path</span>
-            <input value={importPath} onChange={(event) => setImportPath(event.target.value)} placeholder="C:\backup\app.sql" />
+            <div className="path-picker sql-import-picker">
+              <input value={importPath} onChange={(event) => setImportPath(event.target.value)} placeholder="C:\backup\app.sql" />
+              <button
+                type="button"
+                className="sql-file-picker-button"
+                disabled={busy || !selected || selectedDatabase?.system}
+                onClick={() => void browseSqlFile()}
+                title={selected ? `Choose SQL file for ${selected}` : "Select a database first"}
+              >
+                <FolderOpen size={16} />
+                <span>Choose SQL File</span>
+              </button>
+            </div>
           </label>
         </div>
         <div className="settings-actions">
@@ -4399,7 +4603,7 @@ function DatabaseTools({
             <Database size={16} />
             <span>Create</span>
           </button>
-          <button disabled={busy || !databaseName.trim() || !importPath.trim()} onClick={() => void importSelected()}>
+          <button disabled={busy || !selected || selectedDatabase?.system || !importPath.trim()} onClick={() => void importSelected()} title={selected ? `Import SQL into ${selected}` : "Select a database first"}>
             <FileText size={16} />
             <span>Import SQL</span>
           </button>
@@ -4633,6 +4837,7 @@ function SettingsView({
   const [startupStatus, setStartupStatus] = useState<StartupStatus | null>(null);
   const [startupBusy, setStartupBusy] = useState(false);
   const [settingsPane, setSettingsPane] = useState<SettingsPane>("general");
+  const confirm = useDesktopConfirm();
 
   const normalizedTld = normalizeLocalTld(tld);
   const tldValid = isValidLocalTld(normalizedTld);
@@ -4773,7 +4978,14 @@ function SettingsView({
   }
 
   async function removeLaravelInstaller() {
-    if (!window.confirm("Remove Laravel Installer?")) {
+    const confirmed = await confirm({
+      title: "Remove Laravel Installer?",
+      message: "This removes the Composer global Laravel Installer from this local environment.",
+      details: ["You can install it again later from the same Tools panel."],
+      confirmLabel: "Remove Installer",
+      tone: "danger"
+    });
+    if (!confirmed) {
       return;
     }
     setInstallerBusy(true);

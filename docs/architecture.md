@@ -1,20 +1,83 @@
-# laraboxs Architecture
+# Architecture
 
-laraboxs is an original local development manager for Windows PHP projects. This repository contains the app layers that can be built and tested on the current Node toolchain:
+laraboxs is split into small layers so the dashboard, CLI, and future desktop package can share the same service logic.
 
-- `src/core`: config storage, site discovery, hosts rendering, Nginx config generation, PHP command resolution/settings/FastCGI logic, MySQL/MariaDB and Redis service command logic, phpMyAdmin integration, logs, and dashboard summary.
-- `src/core/runtimes.ts`: runtime manifest and app-data installer for PHP, MySQL/MariaDB, Nginx, Redis, Node.js, and Composer.
-- `src/cli`: the `laraboxs` command surface.
-- `src/api`: a localhost-only helper API used by the UI. After `npm run build`, it also serves the built dashboard from `dist-ui` so a single helper process can host the app.
-- `src/ui`: React dashboard for Sites, Nginx, PHP, MySQL/MariaDB, Redis, phpMyAdmin, Logs, Settings, and inline per-site SSL toggles.
-- `src-tauri`: Tauri v2 wrapper scaffold. It requires Rust/Cargo to run or build.
+## Layers
 
-The helper API listens on `127.0.0.1` and the generated Nginx/MySQL/MariaDB/Redis configs bind services to `127.0.0.1`. Passwords use Windows DPAPI when available, with a portable fallback for development and tests.
+- `src/core`: framework detection, config storage, path resolution, hosts rendering, Nginx generation, PHP settings, FastCGI process control, MySQL/MariaDB logic, Redis logic, phpMyAdmin integration, local SSL, logs, runtime installs, site health, and update checks.
+- `src/api`: localhost helper API used by the React dashboard. After `npm run build`, this process also serves the built dashboard from `dist-ui`.
+- `src/cli`: command-line interface that calls the same core modules as the dashboard.
+- `src/ui`: React dashboard built with Vite and lucide-react icons.
+- `src-tauri`: Tauri v2 wrapper scaffold for a Windows desktop package.
+- `scripts`: Windows packaging helpers and service install/status/uninstall scripts.
+- `tests`: Vitest coverage for core behavior and request security.
 
-The Windows service scripts in `scripts/` install the built Node helper API through `sc.exe`. The built API serves both JSON endpoints and the dashboard on `127.0.0.1:47899`. This is a practical bridge for local testing, not the final native helper service.
+## Runtime Model
 
-## Current Boundaries
+User data is stored under `%USERPROFILE%\.config\laraboxs` by default. Set `LARABOXS_HOME` to use a different directory during development or testing.
 
-The current implementation generates configs and service commands, downloads selected runtimes into the laraboxs data directory, and starts binaries from app data when installed. Per-site Nginx entry paths are stored as relative paths inside each project so Laravel can default to `public` while other PHP/static projects can use `.` or a custom folder such as `web` or `dist`. MySQL 9.7, 8.4, 8.0, and MariaDB 11.8.6 can be installed side by side, with one active database runtime selected in config at a time. phpMyAdmin is installed app-locally and exposed through generated Nginx and hosts entries at `phpmyadmin.test`.
+The app installs and runs local runtimes from app data:
 
-Per-site SSL creates a laraboxs local CA, writes CA-signed site certificate/key files with SAN entries, and updates site state/config generation. Trusting the CA is explicit: the CLI and dashboard expose a Windows CurrentUser Root trust action so the user can approve the certificate prompt instead of running a hidden import that may hang.
+- PHP: `%USERPROFILE%\.config\laraboxs\runtimes\php\<version>\php.exe`
+- Nginx: `%USERPROFILE%\.config\laraboxs\services\nginx\nginx.exe`
+- MySQL: `%USERPROFILE%\.config\laraboxs\services\mysql\<version>\bin\mysqld.exe`
+- MariaDB: `%USERPROFILE%\.config\laraboxs\services\mariadb\<version>\bin\mysqld.exe`
+- Redis: `%USERPROFILE%\.config\laraboxs\services\redis\<version>\redis-server.exe`
+- Node.js: `%USERPROFILE%\.config\laraboxs\runtimes\node\<version>\node.exe`
+- Composer: `%USERPROFILE%\.config\laraboxs\runtimes\composer\composer.phar`
+- phpMyAdmin: `%USERPROFILE%\.config\laraboxs\tools\phpmyadmin\<version>`
+
+Generated service configs bind to `127.0.0.1`. The default public web TLD is `.test`.
+
+## Configuration
+
+The main config file is `config.json` inside the laraboxs home directory. It stores:
+
+- Setup state.
+- Parked folders.
+- Global PHP version.
+- Per-site isolated PHP versions.
+- Per-site document root entries.
+- Secured domains.
+- Nginx, MySQL/MariaDB, Redis, startup, and PHP settings.
+
+Config saves create timestamped backups in the app data backup directory and keep the latest backups pruned.
+
+## Sites
+
+Site discovery scans parked folders and classifies projects as Laravel, generic PHP, or static. Laravel projects default their Nginx entry path to `public`; PHP and static projects default to `.`. Users can override a site entry path from the dashboard or CLI.
+
+When Nginx configs are regenerated, laraboxs writes:
+
+- The main `nginx.conf`.
+- Per-site server blocks.
+- A phpMyAdmin server block when phpMyAdmin is installed.
+- HTTPS blocks for secured domains when certificates exist.
+
+## API
+
+The helper API listens on `127.0.0.1:47899` by default. Set `LARABOXS_API_PORT` to use another port.
+
+The API accepts trusted loopback and Tauri origins only. It validates Host and Origin headers for `/api/*` routes and can enforce an optional `X-Laraboxs-Token` header when `LARABOXS_HELPER_TOKEN` is set.
+
+The API exposes endpoints for:
+
+- Dashboard summary.
+- Runtime installation jobs.
+- Site creation and per-site commands.
+- Laravel `.env` profiles.
+- Site workers.
+- Service start/stop/restart actions.
+- PHP, Nginx, MySQL/MariaDB, Redis, phpMyAdmin, SSL, logs, ports, settings, and updates.
+
+## Secrets
+
+Secrets such as generated database passwords are stored through Windows DPAPI when available. Tests and non-Windows development can use the portable fallback format by setting `LARABOXS_SECRET_FALLBACK=1`.
+
+Passwords are not passed to MySQL client commands as command-line arguments. The code uses environment variables such as `MYSQL_PWD` where supported to avoid exposing passwords through process argument lists.
+
+## Desktop And Service Packaging
+
+The current Tauri wrapper loads the same React dashboard and can bundle a prepared Node helper payload. The helper service scripts install the built Node API server with `sc.exe` for local Windows testing.
+
+This service wrapper is a practical bridge, not the final production security model. A hardened release should use a native helper service, signed binaries, a stable update mechanism, and installer-level validation.

@@ -91,6 +91,13 @@ export interface Site {
   framework: Framework;
 }
 
+export interface SiteDeletionResult {
+  site: Site;
+  deletedPath: string;
+  deletedDatabases: string[];
+  skippedDatabases: string[];
+}
+
 export interface SiteHealthStatus {
   domain: string;
   url: string;

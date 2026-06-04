@@ -1,90 +1,160 @@
-# laraboxs Usage
+# Usage Guide
 
-laraboxs stores user data under `%USERPROFILE%\.config\laraboxs` by default. Set `LARABOXS_HOME` to use another location.
+This guide covers local development, the dashboard, the CLI, runtime placement, and Windows-specific actions.
 
-## CLI
+## App Data
 
-```powershell
-npm install
-npm run build
-npm link
+laraboxs stores user data under:
 
-laraboxs park C:\www --dry-run-hosts
-laraboxs sites
-laraboxs site:entry my-app.test public
-laraboxs site:entry:reset my-app.test
-laraboxs use 8.5
-laraboxs isolate 8.5 my-app.test
-laraboxs secure my-app.test
-laraboxs ssl:status
-laraboxs ssl:trust
-laraboxs start
-laraboxs mysql:status
-laraboxs mysql:init
-laraboxs mysql:use 9.7
-laraboxs mysql:use mariadb-11.8.6
-laraboxs mysql:port --auto
-laraboxs mysql:create-db app_name
-laraboxs mysql:env app_name
-laraboxs mysql:password
-laraboxs mysql:change-password "new-secure-password"
-laraboxs redis:status
-laraboxs redis:start
-laraboxs php-fcgi:status
-laraboxs php:settings
-laraboxs php:settings:set memory_limit=512M upload_max_filesize=128M post_max_size=128M extensions=curl,mbstring,openssl,pdo_mysql
-laraboxs phpmyadmin:status
-laraboxs phpmyadmin:install --dry-run-hosts
+```text
+%USERPROFILE%\.config\laraboxs
 ```
 
-Hosts file writes require an elevated shell. Use `--dry-run-hosts` to preview the managed block.
+Set `LARABOXS_HOME` to use another location:
 
-## UI
+```powershell
+$env:LARABOXS_HOME = "C:\Temp\laraboxs-dev-home"
+```
 
-Run the helper API and dashboard:
+Generated hosts file changes target the real Windows hosts file by default. For development tests, set `LARABOXS_HOSTS_FILE` to a temporary file.
+
+## Dashboard
+
+Start the helper API and Vite dashboard:
 
 ```powershell
 npm run api
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`.
+Open:
 
-After a production build, the helper API also serves the built dashboard:
+```text
+http://127.0.0.1:5173
+```
+
+For production-style local hosting:
 
 ```powershell
 npm run build
 npm start
 ```
 
-Open `http://127.0.0.1:47899`.
+Open:
 
-On first launch, choose a sites folder and database runtime. laraboxs parks it and installs the default PHP, selected MySQL or MariaDB runtime, Nginx, Composer, and Node.js stack into `%USERPROFILE%\.config\laraboxs`.
+```text
+http://127.0.0.1:47899
+```
 
-The Sites section includes a Nginx Entry panel for each site. Laravel projects default to `public`; PHP/static projects default to `.`. Set a relative entry such as `public`, `web`, or `dist`, then save to regenerate per-site Nginx configs. The CLI equivalent is `laraboxs site:entry <site> <entry>`, or `laraboxs site:entry <entry>` from inside a parked site.
+On first launch, the setup flow asks for a sites folder and database runtime. The dashboard can then install the default PHP, selected database runtime, Nginx, Composer, Node.js, and phpMyAdmin stack into laraboxs app data.
 
-CLI equivalents:
+## CLI
+
+Build and link the CLI:
 
 ```powershell
-laraboxs install php 8.4
+npm install
+npm run build
+npm link
+```
+
+Useful commands:
+
+```powershell
+laraboxs sites
+laraboxs park C:\www --dry-run-hosts
+laraboxs paths
+laraboxs open my-app.test
+
+laraboxs site:entry my-app.test public
+laraboxs site:entry:reset my-app.test
+
+laraboxs use 8.5
+laraboxs isolate 8.4 my-app.test
+laraboxs unisolate my-app.test
+laraboxs which-php
+laraboxs php -v
+
+laraboxs start
+laraboxs stop
+laraboxs restart
+laraboxs logs
+
+laraboxs secure my-app.test
+laraboxs unsecure my-app.test
+laraboxs ssl:status
+laraboxs ssl:trust
+
+laraboxs mysql:status
+laraboxs mysql:init
+laraboxs mysql:start
+laraboxs mysql:stop
+laraboxs mysql:restart
+laraboxs mysql:port --auto
+laraboxs mysql:use 9.7
+laraboxs mysql:use mariadb-11.8.6
+laraboxs mysql:create-db app_name
+laraboxs mysql:env app_name
+laraboxs mysql:password
+laraboxs mysql:reset-password
+laraboxs mysql:change-password "new-secure-password"
+
+laraboxs redis:status
+laraboxs redis:start
+laraboxs redis:stop
+laraboxs redis:restart
+laraboxs redis:port --auto
+
+laraboxs php:settings
+laraboxs php:settings:set memory_limit=512M upload_max_filesize=128M post_max_size=128M extensions=curl,mbstring,openssl,pdo_mysql
+
+laraboxs phpmyadmin:status
+laraboxs phpmyadmin:install --dry-run-hosts
+
+laraboxs runtimes
 laraboxs install php 8.5
 laraboxs install mysql 9.7
-laraboxs install mysql 8.4
-laraboxs install mysql 8.0
 laraboxs install mysql mariadb-11.8.6
+laraboxs install nginx
 laraboxs install redis
 laraboxs install node
 laraboxs install composer
-laraboxs install --force php 8.4
 laraboxs uninstall redis
-laraboxs runtimes
 ```
 
-phpMyAdmin installs into laraboxs app data and is served through Nginx at `http://phpmyadmin.test`. Run `laraboxs phpmyadmin:install` to install it and sync hosts, or add `--no-hosts` when you want to sync hosts later.
+Hosts file writes require an elevated shell. Use `--dry-run-hosts` when you want to preview the managed block before writing.
+
+## Sites
+
+Park a folder that contains projects:
+
+```powershell
+laraboxs park C:\www --dry-run-hosts
+```
+
+laraboxs discovers direct child folders and assigns domains using the configured TLD. For example, `C:\www\store` becomes `store.test`.
+
+Default entry paths:
+
+- Laravel: `public`
+- PHP: `.`
+- Static: `.`
+
+Change a site entry path:
+
+```powershell
+laraboxs site:entry store.test public
+```
+
+Reset it:
+
+```powershell
+laraboxs site:entry:reset store.test
+```
 
 ## Runtime Placement
 
-laraboxs can download runtimes into app data and starts services when the matching binaries are present:
+Runtimes are installed inside app data:
 
 - Nginx: `%USERPROFILE%\.config\laraboxs\services\nginx\nginx.exe`
 - PHP: `%USERPROFILE%\.config\laraboxs\runtimes\php\8.5\php.exe`
@@ -93,15 +163,43 @@ laraboxs can download runtimes into app data and starts services when the matchi
 - MySQL 8.0: `%USERPROFILE%\.config\laraboxs\services\mysql\8.0\bin\mysqld.exe`
 - MariaDB 11.8.6: `%USERPROFILE%\.config\laraboxs\services\mariadb\11.8.6\bin\mysqld.exe`
 - Redis: `%USERPROFILE%\.config\laraboxs\services\redis\8.8\redis-server.exe`
+- Node.js: `%USERPROFILE%\.config\laraboxs\runtimes\node\24.16.0\node.exe`
+- Composer: `%USERPROFILE%\.config\laraboxs\runtimes\composer\composer.phar`
 - phpMyAdmin: `%USERPROFILE%\.config\laraboxs\tools\phpmyadmin\5.2.3`
 
-All generated service configs bind to `127.0.0.1`.
+## HTTPS
 
-Per-site HTTPS is controlled from the Sites table lock icon or with `laraboxs secure <site>` and `laraboxs unsecure <site>`. laraboxs creates a local CA under app data and signs site certificates with SAN entries for each domain. Run `laraboxs ssl:trust` or use the Sites/Nginx `Trust CA` button once, then approve the Windows certificate prompt so browsers trust generated HTTPS sites. Use `laraboxs ssl:trust --wait` only when you want the CLI to wait for that Windows prompt to close.
+Enable HTTPS for a site:
 
-## Desktop Wrapper
+```powershell
+laraboxs secure store.test
+```
 
-The Tauri wrapper is scaffolded and uses the same React dashboard. For development, start the helper API separately with `npm run api` before opening the UI. After `npm run build`, `npm start` serves the built dashboard and API from the same localhost port. A production desktop build still needs Rust/Cargo for the Tauri wrapper and a bundled runtime strategy.
+Trust the local CA:
+
+```powershell
+laraboxs ssl:trust
+```
+
+Windows will show a certificate trust prompt. Approve it only if you trust the local laraboxs development CA generated on your machine.
+
+Use `laraboxs ssl:trust --wait` when you want the CLI to wait until the prompt closes.
+
+## phpMyAdmin
+
+Install phpMyAdmin:
+
+```powershell
+laraboxs phpmyadmin:install
+```
+
+It is served through generated Nginx config at:
+
+```text
+http://phpmyadmin.test
+```
+
+Use `--no-hosts` if you want to sync hosts later.
 
 ## Helper Service
 
@@ -114,10 +212,30 @@ Start-Service LaraboxsHelper
 npm run helper:status
 ```
 
-Remove it with:
+Remove it:
 
 ```powershell
 npm run helper:uninstall
 ```
 
-This service wrapper uses the local Node runtime and the built API server, which serves both the helper API and built dashboard on `127.0.0.1:47899`. The next production phase should replace it with a native Rust/.NET service.
+The current service wrapper uses the local Node runtime and built API server. A production release should replace this bridge with a hardened native helper service.
+
+## Tauri Desktop Wrapper
+
+Rust and Cargo are required for Tauri commands.
+
+Development:
+
+```powershell
+npm run api
+npm run tauri:dev
+```
+
+Prepare bundled resources after a build:
+
+```powershell
+npm run build
+npm run package:tauri-resources
+```
+
+The Tauri wrapper is scaffolded, but release-grade packaging still needs native helper-service hardening, signing, and installer validation.

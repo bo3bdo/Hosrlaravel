@@ -102,6 +102,16 @@ export async function stopSiteWorker(siteIdentifier: string, kind: SiteWorkerKin
   return stopWorkerStatus(key, "stopped", `${worker.status.label} stop requested.`);
 }
 
+export async function stopSiteWorkers(siteIdentifier: string): Promise<SiteWorkerStatus[]> {
+  const site = await findSite(siteIdentifier);
+  const active = Array.from(workers.keys()).filter((key) => key.startsWith(`${site.domain}:`));
+  return active.map((key) => stopWorkerByKey(key));
+}
+
+export async function stopAllSiteWorkers(): Promise<SiteWorkerStatus[]> {
+  return Array.from(workers.keys()).map((key) => stopWorkerByKey(key));
+}
+
 function pushWorkerLog(key: string, message: string): void {
   const worker = workers.get(key);
   if (!worker) {
@@ -139,6 +149,16 @@ function stopWorkerStatus(key: string, state: SiteWorkerStatus["state"], message
   stoppedStatuses.set(key, status);
   void appendLog("site", `${status.label} ${state} for ${status.site}: ${message}`);
   return status;
+}
+
+function stopWorkerByKey(key: string): SiteWorkerStatus {
+  const worker = workers.get(key);
+  if (worker) {
+    worker.child.kill();
+    return stopWorkerStatus(key, "stopped", `${worker.status.label} stop requested.`);
+  }
+
+  return stopWorkerStatus(key, "stopped", `${workerLabel(key.split(":")[1] as SiteWorkerKind)} is stopped.`);
 }
 
 function workerKey(site: string, kind: SiteWorkerKind): string {

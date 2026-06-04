@@ -71,7 +71,7 @@ pub fn run() {
 
                     if !is_quitting {
                         api.prevent_close();
-                        hide_main_window(app_handle);
+                        quit_app(app_handle);
                     }
                 }
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
@@ -445,7 +445,24 @@ fn stop_helper_api(app_handle: &tauri::AppHandle) {
         let _ = child.kill();
         let _ = child.wait();
         log_helper_api("helper API force-stopped");
+    } else if current_helper_app_dir(app_handle)
+        .map(|app_dir| helper_api_owned_by(&app_dir))
+        .unwrap_or(false)
+    {
+        if request_helper_api_shutdown() {
+            wait_for_helper_api_to_stop();
+            log_helper_api("existing helper API shutdown requested");
+        }
     }
+}
+
+fn current_helper_app_dir(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    app_handle
+        .path()
+        .resource_dir()
+        .ok()
+        .and_then(helper_resource_dir)
+        .map(|resource_dir| normalize_windows_path(resource_dir.join("app")))
 }
 
 fn log_helper_api(message: impl AsRef<str>) {
