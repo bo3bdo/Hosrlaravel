@@ -320,6 +320,50 @@ export interface PortCheckResult {
   message: string;
 }
 
+export type LogSeverity = "info" | "warning" | "error";
+
+export interface LogInsight {
+  id: string;
+  service: string;
+  severity: LogSeverity;
+  message: string;
+  sample: string;
+  count: number;
+  firstSeen?: string;
+  lastSeen?: string;
+  action?: string;
+}
+
+export interface LogInsightSummary {
+  totalLines: number;
+  warningLines: number;
+  errorLines: number;
+  actionableCount: number;
+  groups: LogInsight[];
+  generatedAt: string;
+}
+
+export interface ApplicationUpdateAsset {
+  name: string;
+  downloadUrl: string;
+  size: number;
+  contentType?: string;
+}
+
+export interface ApplicationUpdateStatus {
+  currentVersion: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  checkedAt: string;
+  status: "current" | "available" | "unavailable";
+  releaseUrl?: string;
+  releaseName?: string;
+  publishedAt?: string;
+  asset?: ApplicationUpdateAsset;
+  message?: string;
+  autoInstallAvailable: boolean;
+}
+
 export interface UpdateCenterItem {
   id: string;
   kind: RuntimeKind | "laravel-installer";
@@ -334,6 +378,7 @@ export interface UpdateCenterItem {
 
 export interface UpdateCenterStatus {
   checkedAt: string;
+  application: ApplicationUpdateStatus;
   items: UpdateCenterItem[];
 }
 
@@ -393,6 +438,7 @@ export interface DashboardSummary {
   phpMyAdmin: PhpMyAdminStatus;
   ssl: SslTrustStatus;
   logs: string[];
+  logInsights: LogInsightSummary;
 }
 
 export interface StartupStatus extends StartupSettings {

@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { readRecentLogs } from "./logging.js";
+import { readRecentLogs, summarizeLogs } from "./logging.js";
 import { getMysqlStatus, mysqlConfigPath } from "./mysql.js";
 import { getNginxStatus } from "./nginx.js";
 import { getPaths, mysqlDataForVersion, mysqlRootForVersion, redisDataForVersion, redisRootForVersion } from "./paths.js";
@@ -17,6 +17,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   const mysql = await getMysqlStatus();
   const php = await getPhpFastCgiStatus();
   const redis = await getRedisStatus();
+  const logs = await readRecentLogs();
 
   return {
     config,
@@ -31,7 +32,8 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     runtimes: getRuntimeStatus(),
     phpMyAdmin: getPhpMyAdminStatus(),
     ssl: await getLocalCaStatus(),
-    logs: await readRecentLogs()
+    logs,
+    logInsights: summarizeLogs(logs)
   };
 }
 

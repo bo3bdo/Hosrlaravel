@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { appendLog, clearLogs, readRecentLogs } from "../src/core/logging.js";
+import { appendLog, clearLogs, readRecentLogs, summarizeLogs } from "../src/core/logging.js";
 import { getPaths } from "../src/core/paths.js";
 
 describe("log aggregation", () => {
@@ -32,5 +32,19 @@ describe("log aggregation", () => {
     expect(cleared).toEqual(["laraboxs.log", "redis.log"]);
     expect(await readRecentLogs()).toEqual([]);
     expect(await readFile(path.join(getPaths().logs, "mysql-startup-init.sql"), "utf8")).toBe("keep me\n");
+  });
+
+  it("groups repeated warnings into actionable insights", () => {
+    const summary = summarizeLogs([
+      "[mysql] 2026-06-04 11:53:39 1918 [Warning] Aborted connection 1918 to db: 'unconnected' user: 'unauthenticated' host: '127.0.0.1'",
+      "[mysql] 2026-06-04 11:53:40 1919 [Warning] Aborted connection 1919 to db: 'unconnected' user: 'unauthenticated' host: '127.0.0.1'",
+      "[nginx] port conflict on 127.0.0.1:80",
+      "[php] started cleanly"
+    ]);
+
+    expect(summary.warningLines).toBe(3);
+    expect(summary.groups).toHaveLength(2);
+    expect(summary.groups[0].count).toBe(2);
+    expect(summary.groups.some((group) => /Ports tool/i.test(group.action ?? ""))).toBe(true);
   });
 });

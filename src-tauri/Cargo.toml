@@ -1,6 +1,6 @@
 [package]
 name = "laraboxs"
-version = "0.1.0"
+version = "0.1.2"
 description = "laraboxs local development manager"
 authors = ["laraboxs contributors"]
 edition = "2021"

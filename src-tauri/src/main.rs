@@ -71,7 +71,7 @@ pub fn run() {
 
                     if !is_quitting {
                         api.prevent_close();
-                        quit_app(app_handle);
+                        hide_main_window(app_handle);
                     }
                 }
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {

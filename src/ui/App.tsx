@@ -137,7 +137,7 @@ const shellCopy = {
     live: "Live",
     servicesRunning: "services running",
     sitesCount: "sites",
-    version: "v0.1.0"
+    version: "v0.1.1"
   },
   ar: {
     brandSubtitle: "بيئة تطوير ويندوز",
@@ -147,7 +147,7 @@ const shellCopy = {
     live: "مباشر",
     servicesRunning: "خدمات تعمل",
     sitesCount: "مواقع",
-    version: "v0.1.0"
+    version: "v0.1.1"
   }
 } satisfies Record<AppLanguage, Record<string, string>>;
 
@@ -181,6 +181,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installJobs, setInstallJobs] = useState<RuntimeJobMap>({});
+  const [updateStatus, setUpdateStatus] = useState<UpdateCenterStatus | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<DesktopConfirmOptions | null>(null);
   const pendingConfirm = useRef<((confirmed: boolean) => void) | null>(null);
   const { toasts, addToast, removeToast } = useToasts();
@@ -259,6 +261,35 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function checkForUpdates() {
+      setUpdateChecking(true);
+      try {
+        const status = await getJsonWithTimeout<UpdateCenterStatus>("/api/updates", 7000);
+        if (cancelled) {
+          return;
+        }
+        setUpdateStatus(status);
+        if (status.application.updateAvailable) {
+          addToast(`Laraboxs ${status.application.latestVersion} is available.`, "info");
+        }
+      } catch {
+        if (!cancelled) {
+          setUpdateStatus(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setUpdateChecking(false);
+        }
+      }
+    }
+    void checkForUpdates();
+    return () => {
+      cancelled = true;
+    };
+  }, [addToast]);
+
   const activeJobKey = useMemo(() => {
     return Object.values(installJobs)
       .filter(isActiveRuntimeJob)
@@ -317,6 +348,17 @@ export default function App() {
     ? [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter((service) => service.state === "running").length
     : 0;
   const stackTone = runningServicesCount === 4 ? "green" : runningServicesCount > 0 ? "amber" : "red";
+  const appUpdate = updateStatus?.application;
+  const hasAppUpdate = Boolean(appUpdate?.updateAvailable);
+
+  function openAppUpdate() {
+    const target = appUpdate?.asset?.downloadUrl || appUpdate?.releaseUrl;
+    if (target) {
+      void openExternalUrl(target);
+    } else {
+      setSection("tools");
+    }
+  }
 
   if (!summary) {
     return <BootScreen error={error} busy={busy} refresh={refresh} />;
@@ -391,6 +433,21 @@ export default function App() {
             <p className="topbar-subtitle">{activeSubtitle}</p>
           </div>
           <div className="topbar-actions">
+            {appUpdate ? (
+              <button
+                className={`update-pill ${hasAppUpdate ? "available" : "current"}`}
+                onClick={hasAppUpdate ? openAppUpdate : () => setSection("tools")}
+                title={hasAppUpdate ? "Download the latest Laraboxs release" : "Laraboxs is up to date"}
+              >
+                {hasAppUpdate ? <Download size={16} /> : <CheckCircle2 size={16} />}
+                <span>{hasAppUpdate ? `Update ${appUpdate.latestVersion}` : "Up to date"}</span>
+              </button>
+            ) : updateChecking ? (
+              <div className="update-pill checking">
+                <LoaderCircle size={16} />
+                <span>Checking updates</span>
+              </div>
+            ) : null}
             <div className={`live-pill ${stackTone}`} title={`${runningServicesCount}/4 ${copy.servicesRunning}`}>
               <span className="status-dot pulse" />
               <span>{copy.live}</span>
@@ -419,7 +476,7 @@ export default function App() {
                 <Services summary={summary} post={post} request={request} installJobs={installJobs} startRuntimeInstall={startRuntimeInstall} busy={busy} />
               ) : null}
               {section === "tools" ? (
-                <Tools summary={summary} post={post} request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} />
+                <Tools summary={summary} post={post} request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} updateStatus={updateStatus} />
               ) : null}
               {section === "logs" ? <Logs summary={summary} post={post} busy={busy} /> : null}
               {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} /> : null}
@@ -576,7 +633,8 @@ function Dashboard({
   ) as RuntimeInstallStatus[];
   const installedCoreCount = coreRuntimes.filter((runtime) => runtime.installed).length;
   const securedSites = summary.sites.filter((site) => site.secured).length;
-  const warningLogs = summary.logs.filter((line) => logSeverity(line) !== "info");
+  const warningGroups = summary.logInsights.groups;
+  const warningLines = summary.logInsights.warningLines + summary.logInsights.errorLines;
   const stackReady = runningServices === 4 && installedCoreCount === coreRuntimes.length && summary.ssl.trusted;
   const copy =
     language === "ar"
@@ -600,7 +658,7 @@ function Dashboard({
           sites: "المواقع",
           warnings: "تحذيرات",
           health: "الفحص السريع",
-          recentWarnings: "آخر التحذيرات"
+          recentWarnings: "ملخص التحذيرات"
         }
       : {
           ready: "Local stack is ready",
@@ -622,7 +680,7 @@ function Dashboard({
           sites: "Sites",
           warnings: "Warnings",
           health: "Health Check",
-          recentWarnings: "Recent Warnings"
+          recentWarnings: "Warning Summary"
         };
 
   const canStartInstalledStack = Boolean(selectedPhp?.installed && selectedDatabase?.installed && summary.runtimes.nginx.installed);
@@ -685,7 +743,7 @@ function Dashboard({
       onClick: () => void post("/api/hosts/sync", {})
     });
   }
-  if (warningLogs.length > 0) {
+  if (warningGroups.length > 0) {
     nextActions.push({
       id: "review-logs",
       label: copy.reviewLogs,
@@ -718,7 +776,7 @@ function Dashboard({
           <DashboardMetric icon={Play} label={copy.stack} value={`${runningServices}/4`} tone={runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red"} />
           <DashboardMetric icon={PackageCheck} label={copy.runtimes} value={`${installedCoreCount}/${coreRuntimes.length}`} tone={installedCoreCount === coreRuntimes.length ? "green" : "amber"} />
           <DashboardMetric icon={Globe} label={copy.sites} value={String(summary.sites.length)} tone={summary.sites.length ? "green" : "amber"} />
-          <DashboardMetric icon={CircleAlert} label={copy.warnings} value={String(warningLogs.length)} tone={warningLogs.length ? "amber" : "green"} />
+          <DashboardMetric icon={CircleAlert} label={copy.warnings} value={String(warningGroups.length)} tone={summary.logInsights.errorLines ? "red" : warningGroups.length ? "amber" : "green"} />
         </div>
       </section>
 
@@ -764,15 +822,20 @@ function Dashboard({
           </div>
         </section>
         <section className="settings-panel dashboard-service-panel">
-          <SettingsPanelHeader icon={FileText} title={copy.recentWarnings} detail={warningLogs.length ? `${warningLogs.length} warnings found` : "No warning lines detected"} />
+          <SettingsPanelHeader
+            icon={FileText}
+            title={copy.recentWarnings}
+            detail={warningGroups.length ? `${warningGroups.length} grouped issues from ${warningLines} lines` : "No warning lines detected"}
+          />
           <div className="dashboard-warning-list">
-            {warningLogs.slice(-5).reverse().map((line, index) => (
-              <div key={`${line}-${index}`} className={`dashboard-warning-line ${logSeverity(line)}`}>
-                <span>{logService(line)}</span>
-                <p>{line}</p>
+            {warningGroups.slice(0, 5).map((group) => (
+              <div key={group.id} className={`dashboard-warning-line ${group.severity}`}>
+                <span>{group.service}{group.count > 1 ? ` x${group.count}` : ""}</span>
+                <p>{group.message}</p>
+                {group.action ? <small>{group.action}</small> : null}
               </div>
             ))}
-            {!warningLogs.length ? <div className="settings-empty-row">No recent warnings.</div> : null}
+            {!warningGroups.length ? <div className="settings-empty-row">No recent warnings.</div> : null}
           </div>
           <div className="settings-actions">
             <button onClick={() => onNavigate("logs")}>
@@ -4025,10 +4088,19 @@ function Logs({ summary, post, busy }: ViewProps) {
   });
   const visibleLogs = latestFirst ? [...filteredLogs].reverse() : filteredLogs;
   const displayText = visibleLogs.join("\n") || "No log entries match the current filters.";
+  const insightText = summary.logInsights.groups.length
+    ? summary.logInsights.groups
+        .map((group) => `- [${group.severity}] ${group.service} x${group.count}: ${group.message}${group.action ? `\n  Action: ${group.action}` : ""}`)
+        .join("\n")
+    : "No grouped warnings or errors.";
   const modelText = [
     "Laraboxs diagnostic log",
     `Generated: ${new Date().toISOString()}`,
+    `Grouped issues: ${summary.logInsights.groups.length}, warning lines=${summary.logInsights.warningLines}, error lines=${summary.logInsights.errorLines}`,
     `Filters: service=${serviceFilter}, severity=${severityFilter}, query=${query.trim() || "none"}`,
+    "",
+    "Insights:",
+    insightText,
     "",
     "```text",
     displayText,
@@ -4057,6 +4129,36 @@ function Logs({ summary, post, busy }: ViewProps) {
 
   return (
     <div className="logs-view">
+      <section className="log-insights-panel">
+        <div className="settings-panel-header">
+          <Activity size={18} />
+          <div>
+            <strong>Grouped Diagnostics</strong>
+            <span>
+              {summary.logInsights.groups.length
+                ? `${summary.logInsights.groups.length} issues from ${summary.logInsights.warningLines + summary.logInsights.errorLines} warning lines`
+                : "No warnings or errors detected"}
+            </span>
+          </div>
+        </div>
+        <div className="log-insight-grid">
+          {summary.logInsights.groups.slice(0, 6).map((group) => (
+            <div key={group.id} className={`log-insight-card ${group.severity}`}>
+              <CircleAlert size={18} />
+              <div>
+                <div className="log-insight-title">
+                  <strong>{group.service}</strong>
+                  <Badge label={`x${group.count}`} tone={group.severity === "error" ? "red" : "amber"} />
+                </div>
+                <p>{group.message}</p>
+                {group.action ? <small>{group.action}</small> : null}
+              </div>
+            </div>
+          ))}
+          {!summary.logInsights.groups.length ? <div className="settings-empty-row">The latest logs look clean.</div> : null}
+        </div>
+      </section>
+
       <div className="logs-toolbar">
         <div className="logs-meta">
           <strong>Runtime Logs</strong>
@@ -4121,10 +4223,12 @@ type ToolsPane = "ports" | "updates";
 function Tools({
   request,
   startRuntimeInstall,
-  busy
+  busy,
+  updateStatus
 }: ViewProps & {
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
   startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
+  updateStatus: UpdateCenterStatus | null;
 }) {
   const [pane, setPane] = useState<ToolsPane>("ports");
   const panes: Array<{ id: ToolsPane; label: string; detail: string; icon: typeof Globe }> = [
@@ -4150,7 +4254,7 @@ function Tools({
       </div>
 
       {pane === "ports" ? <PortTools request={request} busy={busy} /> : null}
-      {pane === "updates" ? <UpdateTools request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} /> : null}
+      {pane === "updates" ? <UpdateTools request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} initialUpdates={updateStatus} /> : null}
     </div>
   );
 }
@@ -4730,31 +4834,42 @@ function PortTools({ busy }: { request: (path: string, body?: Record<string, unk
 function UpdateTools({
   request,
   startRuntimeInstall,
-  busy
+  busy,
+  initialUpdates
 }: {
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
   startRuntimeInstall: (kind: RuntimeKind, version?: string, force?: boolean) => Promise<RuntimeInstallJob | undefined>;
   busy: boolean;
+  initialUpdates: UpdateCenterStatus | null;
 }) {
-  const [updates, setUpdates] = useState<UpdateCenterStatus | null>(null);
+  const [updates, setUpdates] = useState<UpdateCenterStatus | null>(initialUpdates);
   const [updateError, setUpdateError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function loadUpdates() {
-    setLoading(true);
+  async function loadUpdates(showLoading = true) {
+    if (showLoading) {
+      setLoading(true);
+    }
     try {
-      setUpdates(await getJson<UpdateCenterStatus>("/api/updates"));
+      setUpdates(await getJsonWithTimeout<UpdateCenterStatus>("/api/updates", 9000));
       setUpdateError("");
     } catch (error) {
       setUpdates(null);
       setUpdateError(error instanceof Error ? error.message : String(error));
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
-    void loadUpdates();
+    if (initialUpdates) {
+      setUpdates(initialUpdates);
+      void loadUpdates(false);
+      return;
+    }
+    void loadUpdates(true);
   }, []);
 
   async function runUpdate(item: UpdateCenterStatus["items"][number]) {
@@ -4767,9 +4882,19 @@ function UpdateTools({
     await loadUpdates();
   }
 
+  function openApplicationUpdate() {
+    const app = updates?.application;
+    const target = app?.updateAvailable ? app.asset?.downloadUrl || app.releaseUrl : app?.releaseUrl || app?.asset?.downloadUrl;
+    if (target) {
+      void openExternalUrl(target);
+    }
+  }
+
+  const appUpdate = updates?.application;
+
   return (
     <section className="settings-panel wide-settings-panel">
-      <SettingsPanelHeader icon={PackageCheck} title="Updates Center" detail={updates ? `Checked ${new Date(updates.checkedAt).toLocaleTimeString()}` : "Checking runtimes"} />
+      <SettingsPanelHeader icon={PackageCheck} title="Updates Center" detail={updates ? `Checked ${new Date(updates.checkedAt).toLocaleTimeString()}` : "Checking releases and runtimes"} />
       {updateError ? <div className="notice compact-notice">{updateError}</div> : null}
       <div className="settings-actions">
         <button disabled={busy || loading} onClick={() => void loadUpdates()}>
@@ -4777,6 +4902,35 @@ function UpdateTools({
           <span>Refresh</span>
         </button>
       </div>
+      {appUpdate ? (
+        <div className={`application-update-card ${appUpdate.status}`}>
+          <div className="application-update-main">
+            <div className="application-update-icon">
+              <PackageCheck size={22} />
+            </div>
+            <div>
+              <span className="eyebrow">Laraboxs App</span>
+              <h3>{appUpdate.updateAvailable ? `Version ${appUpdate.latestVersion} is ready` : `Version ${appUpdate.currentVersion}`}</h3>
+              <p>{appUpdate.message ?? "Release status loaded from GitHub."}</p>
+              <div className="application-update-meta">
+                <span>Current {appUpdate.currentVersion}</span>
+                {appUpdate.latestVersion ? <span>Latest {appUpdate.latestVersion}</span> : null}
+                {appUpdate.asset ? <span>{appUpdate.asset.name} · {formatBytes(appUpdate.asset.size)}</span> : null}
+              </div>
+            </div>
+          </div>
+          <div className="application-update-actions">
+            <Badge
+              label={appUpdate.status === "available" ? "update" : appUpdate.status === "current" ? "current" : "offline"}
+              tone={appUpdate.status === "available" ? "amber" : appUpdate.status === "current" ? "green" : "red"}
+            />
+            <button className={appUpdate.updateAvailable ? "primary" : ""} disabled={busy || loading || (!appUpdate.releaseUrl && !appUpdate.asset)} onClick={openApplicationUpdate}>
+              {appUpdate.updateAvailable ? <Download size={16} /> : <ExternalLink size={16} />}
+              <span>{appUpdate.updateAvailable ? "Download Update" : "Release Notes"}</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="updates-list">
         {(updates?.items ?? []).map((item) => (
           <div key={item.id} className="update-row">
@@ -5549,6 +5703,16 @@ function statusLabel(status: RuntimeInstallJob["status"]): string {
 
 function isActiveRuntimeJob(job: RuntimeInstallJob): boolean {
   return job.status !== "complete" && job.status !== "failed";
+}
+
+async function getJsonWithTimeout<T>(path: string, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await getJson<T>(path, { signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function formatTransfer(job: RuntimeInstallJob): string {

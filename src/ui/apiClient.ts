@@ -23,8 +23,8 @@ export function apiUrl(path: string): string {
   return `http://127.0.0.1:47899${normalizedPath}`;
 }
 
-export async function getJson<T>(path: string): Promise<T> {
-  return requestJson<T>(path, { method: "GET" });
+export async function getJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return requestJson<T>(path, { ...init, method: "GET" });
 }
 
 export async function postJson<T>(path: string, body: JsonBody = {}): Promise<T> {

@@ -16,6 +16,7 @@ describe("developer tools", () => {
     tempHome = await mkdir(path.join(os.tmpdir(), `laraboxs-tools-${Date.now()}-`), { recursive: true });
     process.env.LARABOXS_HOME = tempHome;
     process.env.LARABOXS_SKIP_PATH_UPDATE = "1";
+    process.env.LARABOXS_SKIP_APP_UPDATE_CHECK = "1";
     parked = path.join(tempHome, "www");
     await mkdir(path.join(parked, "laravel-app", "public"), { recursive: true });
     await mkdir(path.join(parked, "plain-php"), { recursive: true });
@@ -44,6 +45,8 @@ describe("developer tools", () => {
   it("returns update center items for runtimes and Laravel Installer", async () => {
     const status = await getUpdateCenterStatus();
 
+    expect(status.application.currentVersion).toMatch(/\d+\.\d+\.\d+/);
+    expect(status.application.status).toBe("unavailable");
     expect(status.items.some((item) => item.id.startsWith("php:"))).toBe(true);
     expect(status.items.some((item) => item.id === "laravel-installer")).toBe(true);
   });

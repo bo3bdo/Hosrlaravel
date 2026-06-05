@@ -1,6 +1,7 @@
-import { Activity, CheckCircle2, CircleAlert, Network, Play, ShieldCheck } from "lucide-react";
+import { Activity, CheckCircle2, CircleAlert, Clipboard, Network, Play, ShieldCheck, Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { DashboardSummary, RuntimeInstallStatus } from "../types.js";
+import { copyTextToClipboard } from "../apiClient.js";
 
 type HealthTone = "green" | "amber" | "red";
 type HealthItem = {
@@ -18,6 +19,7 @@ interface HealthCheckPanelProps {
 
 export function HealthCheckPanel({ summary, busy, post }: HealthCheckPanelProps) {
   const [fixing, setFixing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const selectedPhp = summary.runtimes.php.find((runtime) => runtime.version === summary.config.globalPhpVersion);
   const selectedDatabase = summary.runtimes.mysql.find((runtime) => runtime.version === summary.config.mysql.version);
   const coreRuntimes = [selectedPhp, selectedDatabase, summary.runtimes.nginx, summary.runtimes.node, summary.runtimes.composer].filter(Boolean) as RuntimeInstallStatus[];
@@ -25,9 +27,10 @@ export function HealthCheckPanel({ summary, busy, post }: HealthCheckPanelProps)
   const services = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis];
   const runningServices = services.filter((service) => service.state === "running").length;
   const securedSites = summary.sites.filter((site) => site.secured).length;
-  const hasLogWarnings = summary.logs.some((line) => /\b(error|failed|denied|refusing)\b/i.test(line));
+  const hasLogWarnings = summary.logInsights.warningLines > 0 || summary.logInsights.errorLines > 0;
   const canStartInstalledStack = Boolean(selectedPhp?.installed && selectedDatabase?.installed && summary.runtimes.nginx.installed);
   const canRepairLocalConfig = summary.sites.length > 0 || (securedSites > 0 && !summary.ssl.trusted);
+  const canRepairAll = canStartInstalledStack || canRepairLocalConfig;
 
   const checks = useMemo<HealthItem[]>(
     () => [
@@ -64,8 +67,10 @@ export function HealthCheckPanel({ summary, busy, post }: HealthCheckPanelProps)
       {
         id: "logs",
         label: "Logs",
-        detail: hasLogWarnings ? "Recent warning or failure detected" : `${summary.logs.length} recent lines`,
-        tone: hasLogWarnings ? "amber" : "green"
+        detail: hasLogWarnings
+          ? `${summary.logInsights.groups.length} grouped issues from ${summary.logInsights.warningLines + summary.logInsights.errorLines} lines`
+          : `${summary.logs.length} recent lines`,
+        tone: summary.logInsights.errorLines ? "red" : hasLogWarnings ? "amber" : "green"
       }
     ],
     [coreRuntimes.length, hasLogWarnings, installedCoreCount, runningServices, securedSites, summary]
@@ -105,6 +110,33 @@ export function HealthCheckPanel({ summary, busy, post }: HealthCheckPanelProps)
     }
   }
 
+  async function repairAll() {
+    setFixing(true);
+    try {
+      await startInstalledStack();
+      await repairLocalConfig();
+    } finally {
+      setFixing(false);
+    }
+  }
+
+  async function copyHealthReport() {
+    const report = [
+      "Laraboxs health report",
+      `Generated: ${new Date().toISOString()}`,
+      `Services: ${runningServices}/4 running`,
+      `Runtimes: ${installedCoreCount}/${coreRuntimes.length} installed`,
+      `Sites: ${summary.sites.length}`,
+      `SSL CA: ${summary.ssl.trusted ? "trusted" : "not trusted"}`,
+      `Logs: ${summary.logInsights.groups.length} grouped issues`,
+      "",
+      ...summary.logInsights.groups.slice(0, 8).map((group) => `- [${group.severity}] ${group.service} x${group.count}: ${group.message}`)
+    ].join("\n");
+    await copyTextToClipboard(report);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+
   return (
     <section className="settings-panel wide-settings-panel health-panel">
       <div className="settings-panel-header">
@@ -126,6 +158,10 @@ export function HealthCheckPanel({ summary, busy, post }: HealthCheckPanelProps)
         ))}
       </div>
       <div className="settings-actions">
+        <button className="primary" disabled={busy || fixing || !canRepairAll} onClick={() => void repairAll()} title="Start services and repair local routing">
+          <Wrench size={16} />
+          <span>Repair All</span>
+        </button>
         <button disabled={busy || fixing || !canStartInstalledStack || runningServices === 4} onClick={() => void startInstalledStack()} title="Start installed services">
           <Play size={16} />
           <span>Start Stack</span>
@@ -133,6 +169,10 @@ export function HealthCheckPanel({ summary, busy, post }: HealthCheckPanelProps)
         <button disabled={busy || fixing || !canRepairLocalConfig} onClick={() => void repairLocalConfig()} title="Repair local hosts and SSL trust">
           {securedSites > 0 && !summary.ssl.trusted ? <ShieldCheck size={16} /> : <Network size={16} />}
           <span>Repair Local</span>
+        </button>
+        <button disabled={busy || fixing} onClick={() => void copyHealthReport()} title="Copy a compact health report">
+          <Clipboard size={16} />
+          <span>{copied ? "Copied" : "Copy Report"}</span>
         </button>
       </div>
     </section>
