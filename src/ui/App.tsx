@@ -136,8 +136,7 @@ const shellCopy = {
     languageButton: "AR",
     live: "Live",
     servicesRunning: "services running",
-    sitesCount: "sites",
-    version: "v0.1.1"
+    sitesCount: "sites"
   },
   ar: {
     brandSubtitle: "بيئة تطوير ويندوز",
@@ -146,13 +145,19 @@ const shellCopy = {
     languageButton: "EN",
     live: "مباشر",
     servicesRunning: "خدمات تعمل",
-    sitesCount: "مواقع",
-    version: "v0.1.1"
+    sitesCount: "مواقع"
   }
 } satisfies Record<AppLanguage, Record<string, string>>;
 
+const bundledAppVersion = __LARABOXS_APP_VERSION__;
+
 function sectionLabel(section: { label: string; labelAr: string }, language: AppLanguage): string {
   return language === "ar" ? section.labelAr : section.label;
+}
+
+function appVersionLabel(version: string | undefined): string {
+  const normalized = (version ?? bundledAppVersion).trim() || bundledAppVersion;
+  return normalized.toLowerCase().startsWith("v") ? normalized : `v${normalized}`;
 }
 
 function serviceBadgeForSection(sectionId: Section, summary: DashboardSummary): JSX.Element | null {
@@ -350,6 +355,7 @@ export default function App() {
   const stackTone = runningServicesCount === 4 ? "green" : runningServicesCount > 0 ? "amber" : "red";
   const appUpdate = updateStatus?.application;
   const hasAppUpdate = Boolean(appUpdate?.updateAvailable);
+  const displayedAppVersion = appVersionLabel(bundledAppVersion);
 
   function openAppUpdate() {
     const target = appUpdate?.asset?.downloadUrl || appUpdate?.releaseUrl;
@@ -500,7 +506,7 @@ export default function App() {
             <span className="status-bar-sep" aria-hidden="true" />
             <span>.{summary.config.tld}</span>
           </div>
-          <div className="status-bar-group muted">{copy.version}</div>
+          <div className="status-bar-group muted">{displayedAppVersion}</div>
         </footer>
       </div>
 

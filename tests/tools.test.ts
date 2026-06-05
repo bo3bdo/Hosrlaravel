@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -44,8 +44,9 @@ describe("developer tools", () => {
 
   it("returns update center items for runtimes and Laravel Installer", async () => {
     const status = await getUpdateCenterStatus();
+    const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { version: string };
 
-    expect(status.application.currentVersion).toMatch(/\d+\.\d+\.\d+/);
+    expect(status.application.currentVersion).toBe(packageJson.version);
     expect(status.application.status).toBe("unavailable");
     expect(status.items.some((item) => item.id.startsWith("php:"))).toBe(true);
     expect(status.items.some((item) => item.id === "laravel-installer")).toBe(true);

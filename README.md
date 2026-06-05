@@ -8,6 +8,8 @@
 
 Repository: [github.com/bo3bdo/Hosrlaravel](https://github.com/bo3bdo/Hosrlaravel)
 
+Download the Windows app from the [GitHub Releases page](https://github.com/bo3bdo/Hosrlaravel/releases).
+
 ## Screenshots
 
 <p align="center">
@@ -69,6 +71,7 @@ Repository: [github.com/bo3bdo/Hosrlaravel](https://github.com/bo3bdo/Hosrlarave
 - App-local phpMyAdmin exposed at `phpmyadmin.test`.
 - Local CA generation, per-site HTTPS certificates, and explicit Windows trust flow.
 - Localhost-only helper API with trusted host/origin checks and optional helper token support.
+- Update Center for app release checks, runtime updates, and Laravel Installer status.
 - Tauri v2 desktop wrapper scaffold and Windows helper-service scripts.
 - Vitest coverage for API security, CLI parsing, hosts merging, runtime installs, service logic, SSL, logs, and site detection.
 
@@ -178,6 +181,14 @@ Read [docs/development.md](docs/development.md) for contribution workflow, test 
 laraboxs is original open-source software under the [MIT License](LICENSE). Contributions are welcome through issues and pull requests. Please follow [CONTRIBUTING.md](CONTRIBUTING.md) and report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 Do not commit local secrets, `.env` files, runtime downloads, or screenshots that show passwords or API keys. App data and passwords stay under `%USERPROFILE%\.config\laraboxs` on your machine.
+
+## Release Notes
+
+### v0.1.3
+
+- Updated Node, Tauri, and Rust package metadata to `0.1.3`.
+- Fixed the dashboard footer so it shows the bundled app version instead of the stale `v0.1.1` label.
+- Documented the Update Center as a first-class feature for application, runtime, and Laravel Installer checks.
 
 ## Current Status
 
