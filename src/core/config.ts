@@ -49,6 +49,8 @@ const defaultPhpExtensions = [
   "pdo_sqlsrv"
 ];
 
+const extensionsAddedAfterLegacyDefaults = defaultPhpExtensions.filter((extension) => !legacyDefaultPhpExtensions.includes(extension));
+
 export function defaultConfig(): LaraboxsConfig {
   return {
     version: 1,
@@ -241,7 +243,7 @@ function enabledExtensionsWithDefaults(extensions: string[] | undefined): string
   }
 
   const normalized = normalizeExtensionList(extensions);
-  if (hasEveryExtension(normalized, legacyDefaultPhpExtensions)) {
+  if (hasEveryExtension(normalized, legacyDefaultPhpExtensions) && !hasAnyExtension(normalized, extensionsAddedAfterLegacyDefaults)) {
     return [...normalized, ...defaultPhpExtensions];
   }
 
@@ -251,4 +253,9 @@ function enabledExtensionsWithDefaults(extensions: string[] | undefined): string
 function hasEveryExtension(extensions: string[], requiredExtensions: string[]): boolean {
   const extensionSet = new Set(extensions);
   return requiredExtensions.every((extension) => extensionSet.has(extension));
+}
+
+function hasAnyExtension(extensions: string[], candidates: string[]): boolean {
+  const extensionSet = new Set(extensions);
+  return candidates.some((extension) => extensionSet.has(extension));
 }

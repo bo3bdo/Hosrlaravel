@@ -143,9 +143,22 @@ export async function trustLocalCa({ wait = false }: { wait?: boolean } = {}): P
   const status = await runVisibleTrustCommand(localCaCertPath(), wait);
   if (status !== 0) {
     await appendLog("ssl", `local CA trust command exited with code ${status}`);
+    return {
+      ...(await getLocalCaStatus()),
+      message: `Local CA trust command failed with exit code ${status}.`
+    };
   }
 
-  return getLocalCaStatus();
+  const nextStatus = await getLocalCaStatus();
+  if (!nextStatus.trusted) {
+    return {
+      ...nextStatus,
+      message: "Local CA trust command finished, but Windows did not report the CA as trusted yet."
+    };
+  }
+
+  await appendLog("ssl", `trusted local CA in ${nextStatus.store ?? "Windows certificate store"}`);
+  return nextStatus;
 }
 
 async function issueCertificate(domain: string): Promise<void> {
