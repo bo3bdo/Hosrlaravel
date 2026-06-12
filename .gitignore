@@ -1,4 +1,6 @@
 node_modules/
+.cargo-home/
+.npm-cache/
 dist/
 dist-ui/
 .vite/

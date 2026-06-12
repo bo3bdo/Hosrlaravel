@@ -1279,6 +1279,11 @@ async function runRuntimeWizardTask(
 
   if (finishedJob.status === "failed") {
     const message = finishedJob.error ?? finishedJob.message ?? `${task.label} failed.`;
+    if (isRecoverableRuntimeInstallFailure(finishedJob)) {
+      updateTask(task.id, "complete", message);
+      await refresh();
+      return;
+    }
     updateTask(task.id, "failed", message);
     throw new Error(message);
   }
@@ -1298,6 +1303,11 @@ async function waitForRuntimeJob(job: RuntimeInstallJob, onUpdate: (job: Runtime
   }
 
   return currentJob;
+}
+
+function isRecoverableRuntimeInstallFailure(job: RuntimeInstallJob): boolean {
+  const message = `${job.error ?? ""} ${job.message ?? ""}`;
+  return job.kind === "php" && /disabled .+ automatically/i.test(message) && /can continue running/i.test(message);
 }
 
 function firstRunTaskDefinitions(

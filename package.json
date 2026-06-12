@@ -1,6 +1,6 @@
 {
   "name": "laraboxs-windows",
-  "version": "0.1.3",
+  "version": "0.1.7",
   "description": "Windows-first local development manager for PHP and Laravel projects.",
   "private": true,
   "license": "MIT",
