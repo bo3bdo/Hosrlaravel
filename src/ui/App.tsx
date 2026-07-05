@@ -431,13 +431,7 @@ export default function App() {
     <div className={`app-shell ${language === "ar" ? "rtl" : ""}`} dir={language === "ar" ? "rtl" : "ltr"}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">
-            <span>L</span>
-          </div>
-          <div>
-            <strong>laraboxs</strong>
-            <span>{copy.brandSubtitle}</span>
-          </div>
+          <strong>laraboxs</strong>
         </div>
         <nav aria-label={language === "ar" ? "التنقل الرئيسي" : "Main navigation"}>
           {sections.map((item) => {
@@ -472,50 +466,19 @@ export default function App() {
       <div className="main-frame">
         <header className="topbar desktop-titlebar">
           <div className="topbar-leading">
-            <span className="eyebrow">{language === "ar" ? "مساحة العمل" : "Workspace"}</span>
             <h1>{activeLabel}</h1>
-            <p className="topbar-subtitle">{activeSubtitle}</p>
-          </div>
-          <div className="topbar-context" aria-label={language === "ar" ? "ملخص سريع" : "Quick summary"}>
-            <span>
-              <Server size={15} />
-              <strong>{runningServicesCount}/4</strong>
-              <small>{copy.servicesRunning}</small>
-            </span>
-            <span>
-              <Globe size={15} />
-              <strong>{summary.sites.length}</strong>
-              <small>{copy.sitesCount}</small>
-            </span>
           </div>
           <div className="topbar-actions">
-            {appUpdate ? (
+            {hasAppUpdate && appUpdate ? (
               <button
-                className={`update-pill ${hasAppUpdate ? "available" : "current"}`}
-                onClick={hasAppUpdate ? openAppUpdate : () => setSection("tools")}
-                title={hasAppUpdate ? "Download the latest Laraboxs release" : "Laraboxs is up to date"}
+                className="update-pill available"
+                onClick={openAppUpdate}
+                title="Download the latest Laraboxs release"
               >
-                {hasAppUpdate ? <Download size={16} /> : <CheckCircle2 size={16} />}
-                <span>{hasAppUpdate ? `Update ${appUpdate.latestVersion}` : "Up to date"}</span>
+                <Download size={16} />
+                <span>{`Update ${appUpdate.latestVersion}`}</span>
               </button>
-            ) : updateChecking ? (
-              <div className="update-pill checking">
-                <LoaderCircle size={16} />
-                <span>Checking updates</span>
-              </div>
             ) : null}
-            <div className={`live-pill ${stackTone}`} title={`${runningServicesCount}/4 ${copy.servicesRunning}`}>
-              <span className="status-dot pulse" />
-              <span>{copy.live}</span>
-            </div>
-            <button className="icon-button" onClick={() => setLanguage((current) => (current === "en" ? "ar" : "en"))} title="Toggle language">
-              <Languages size={18} />
-              <span>{copy.languageButton}</span>
-            </button>
-            <button className={`icon-button ${busy ? "is-busy" : ""}`} onClick={() => void refresh()} disabled={busy} title="Refresh">
-              <RotateCw size={18} />
-              <span>{copy.refresh}</span>
-            </button>
           </div>
         </header>
 
@@ -535,7 +498,7 @@ export default function App() {
                 <Tools summary={summary} post={post} request={request} startRuntimeInstall={startRuntimeInstall} busy={busy} updateStatus={updateStatus} language={language} />
               ) : null}
               {section === "logs" ? <Logs summary={summary} post={post} busy={busy} language={language} /> : null}
-              {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} language={language} /> : null}
+              {section === "settings" ? <SettingsView summary={summary} post={post} request={request} busy={busy} language={language} onLanguageChange={setLanguage} /> : null}
             </div>
           </section>
         )}
@@ -691,125 +654,81 @@ function Dashboard({
     }
   }
 
-  const nextActions: Array<{
-    id: string;
-    label: string;
-    detail: string;
-    icon: typeof Globe;
-    primary?: boolean;
-    disabled?: boolean;
-    onClick: () => void;
-  }> = [];
+  async function stopRunningStack() {
+    if (summary.services.nginx.state === "running") {
+      await post("/api/nginx/stop");
+    }
+    if (summary.services.php.state === "running") {
+      await post("/api/php-fcgi/stop");
+    }
+    if (summary.services.redis.state === "running") {
+      await post("/api/redis/stop");
+    }
+    if (summary.services.mysql.state === "running") {
+      await post("/api/mysql/stop");
+    }
+  }
 
-  if (runningServices < 4) {
-    nextActions.push({
-      id: "start-stack",
-      label: copy.startStack,
-      detail: copy.startStackDetail,
-      icon: Play,
-      primary: true,
-      disabled: busy || !canStartInstalledStack,
-      onClick: () => void startInstalledStack()
-    });
-  }
-  if (securedSites > 0 && !summary.ssl.trusted) {
-    nextActions.push({
-      id: "trust-ca",
-      label: copy.trustCa,
-      detail: copy.trustCaDetail,
-      icon: ShieldCheck,
-      primary: nextActions.length === 0,
-      disabled: busy || summary.ssl.platform !== "win32",
-      onClick: () => void post("/api/ssl/trust")
-    });
-  }
-  if (summary.sites.length > 0) {
-    nextActions.push({
-      id: "sync-hosts",
-      label: copy.syncHosts,
-      detail: copy.syncHostsDetail,
-      icon: Network,
-      primary: nextActions.length === 0 && !stackReady,
-      disabled: busy,
-      onClick: () => void post("/api/hosts/sync", {})
-    });
-  }
-  if (warningGroups.length > 0) {
-    nextActions.push({
-      id: "review-logs",
-      label: copy.reviewLogs,
-      detail: copy.reviewLogsDetail,
-      icon: FileText,
-      primary: nextActions.length === 0,
-      onClick: () => onNavigate("logs")
-    });
-  }
-  if (nextActions.length === 0) {
-    nextActions.push({
-      id: "open-sites",
-      label: copy.openSites,
-      detail: copy.openSitesDetail,
-      icon: Globe,
-      primary: true,
-      onClick: () => onNavigate("sites")
-    });
-  }
+  const serviceRows = [
+    { label: "Nginx", service: summary.services.nginx, detail: `Port ${summary.config.nginx.httpPort}` },
+    { label: "PHP", service: summary.services.php, detail: summary.config.globalPhpVersion },
+    { label: databaseEngineName(selectedDatabase), service: summary.services.mysql, detail: `Port ${summary.config.mysql.port}` },
+    { label: "Redis", service: summary.services.redis, detail: `Port ${summary.config.redis.port}` }
+  ];
 
   return (
-    <div className="dashboard-view">
-      <section className={`dashboard-hero ${stackReady ? "ready" : "attention"}`}>
-        <div className="dashboard-hero-copy">
-          <span className="eyebrow">{copy.health}</span>
-          <h2>{stackReady ? copy.ready : copy.needsWork}</h2>
-          <p>{copy.subtitle}</p>
+    <div className="dashboard-view herd-dashboard">
+      <section className="dash-status-bar">
+        <span className={`status-dot ${runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red"}`} />
+        <div className="dash-status-copy">
+          <strong>{stackReady ? copy.ready : copy.needsWork}</strong>
+          <span>
+            {runningServices}/4 {language === "ar" ? "خدمات تعمل" : "services running"} · PHP {summary.config.globalPhpVersion} · {summary.sites.length}{" "}
+            {language === "ar" ? "مواقع" : "sites"}
+          </span>
         </div>
-        <div className="dashboard-metrics">
-          <DashboardMetric icon={Play} label={copy.stack} value={`${runningServices}/4`} tone={runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red"} />
-          <DashboardMetric icon={PackageCheck} label={copy.runtimes} value={`${installedCoreCount}/${coreRuntimes.length}`} tone={installedCoreCount === coreRuntimes.length ? "green" : "amber"} />
-          <DashboardMetric icon={Globe} label={copy.sites} value={String(summary.sites.length)} tone={summary.sites.length ? "green" : "amber"} />
-          <DashboardMetric icon={CircleAlert} label={copy.warnings} value={String(warningGroups.length)} tone={summary.logInsights.errorLines ? "red" : warningGroups.length ? "amber" : "green"} />
+        <div className="dash-status-actions">
+          <button className="primary" disabled={busy || runningServices === 4 || !canStartInstalledStack} onClick={() => void startInstalledStack()}>
+            <Play size={16} />
+            <span>{language === "ar" ? "تشغيل الكل" : "Start All"}</span>
+          </button>
+          <button disabled={busy || runningServices === 0} onClick={() => void stopRunningStack()}>
+            <CircleStop size={16} />
+            <span>{language === "ar" ? "إيقاف الكل" : "Stop All"}</span>
+          </button>
         </div>
       </section>
 
-      <section className="dashboard-actions-panel">
-        <div className="settings-panel-header">
-          <Activity size={18} />
-          <div>
-            <strong>{copy.nextAction}</strong>
-            <span>{nextActions[0]?.detail}</span>
+      <div className="dash-grid">
+        <section className="settings-panel dash-card">
+          <SettingsPanelHeader icon={Server} title={copy.servicesTitle} detail={copy.servicesDetail} />
+          <div className="dash-service-list">
+            {serviceRows.map((item) => {
+              const tone = item.service.state === "running" ? "green" : item.service.state === "stopped" ? "red" : "amber";
+              return (
+                <button key={item.label} className="dash-service-row" onClick={() => onNavigate("services")} title={`${item.label} - ${item.service.state}`}>
+                  <span className={`status-dot ${tone}`} />
+                  <strong>{item.label}</strong>
+                  <span>{item.detail}</span>
+                  <small>{item.service.state}</small>
+                </button>
+              );
+            })}
           </div>
-        </div>
-        <div className="dashboard-action-grid">
-          {nextActions.slice(0, 4).map((action) => {
-            const Icon = action.icon;
-            return (
-              <button key={action.id} className={action.primary ? "dashboard-action primary" : "dashboard-action"} disabled={action.disabled} onClick={action.onClick}>
-                <Icon size={18} />
-                <span>
-                  <strong>{action.label}</strong>
-                  <small>{action.detail}</small>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+        </section>
 
-      <div className="dashboard-main-grid">
-        <HealthCheckPanel summary={summary} post={post} busy={busy} />
-        <section className="settings-panel dashboard-site-panel">
-          <SettingsPanelHeader icon={Globe} title={copy.recentSites} detail={copy.recentSitesDetail} />
-          <div className="dashboard-site-list">
-            {summary.sites.slice(0, 5).map((site) => (
-              <div key={site.domain} className="dashboard-site-row">
-                <Globe size={16} />
+        <section className="settings-panel dash-card">
+          <SettingsPanelHeader icon={Globe} title={language === "ar" ? "وصول سريع" : "Quick Access"} detail={copy.recentSitesDetail} />
+          <div className="dash-site-list">
+            {summary.sites.slice(0, 6).map((site) => (
+              <div key={site.domain} className="dash-site-row">
+                {site.secured ? <Lock className="site-lock secured" size={14} /> : <LockOpen className="site-lock" size={14} />}
                 <div>
                   <strong>{site.domain}</strong>
-                  <span>{site.name} - PHP {site.phpVersion}</span>
+                  <span>PHP {site.phpVersion}</span>
                 </div>
-                <Badge label={site.secured ? "https" : "http"} tone={site.secured ? "green" : "amber"} />
                 <button onClick={() => void openExternalUrl(site.url)} title={`Open ${site.domain}`}>
-                  <ExternalLink size={16} />
+                  <ExternalLink size={15} />
                 </button>
               </div>
             ))}
@@ -817,50 +736,35 @@ function Dashboard({
           </div>
           <div className="settings-actions">
             <button onClick={() => onNavigate("sites")}>
-              <Globe size={16} />
+              <Globe size={15} />
               <span>{copy.openSitesButton}</span>
             </button>
           </div>
         </section>
-        <section className="settings-panel dashboard-service-panel">
-          <SettingsPanelHeader icon={Server} title={copy.servicesTitle} detail={copy.servicesDetail} />
-          <div className="dashboard-service-grid">
-            <ServiceStrip service={summary.services.php} />
-            <ServiceStrip service={summary.services.nginx} />
-            <ServiceStrip service={summary.services.mysql} />
-            <ServiceStrip service={summary.services.redis} />
-          </div>
-          <div className="settings-actions">
-            <button onClick={() => onNavigate("services")}>
-              <Server size={16} />
-              <span>{copy.openServicesButton}</span>
-            </button>
-          </div>
-        </section>
-        <section className="settings-panel dashboard-service-panel">
-          <SettingsPanelHeader
-            icon={FileText}
-            title={copy.recentWarnings}
-            detail={copy.recentWarningsDetail}
-          />
+      </div>
+
+      {warningGroups.length ? (
+        <section className="settings-panel dash-card">
+          <SettingsPanelHeader icon={FileText} title={copy.recentWarnings} detail={copy.recentWarningsDetail} />
           <div className="dashboard-warning-list">
-            {warningGroups.slice(0, 5).map((group) => (
+            {warningGroups.slice(0, 4).map((group) => (
               <div key={group.id} className={`dashboard-warning-line ${group.severity}`}>
                 <span>{group.service}{group.count > 1 ? ` x${group.count}` : ""}</span>
                 <p>{group.message}</p>
                 {group.action ? <small>{group.action}</small> : null}
               </div>
             ))}
-            {!warningGroups.length ? <div className="settings-empty-row">{copy.noWarnings}</div> : null}
           </div>
           <div className="settings-actions">
             <button onClick={() => onNavigate("logs")}>
-              <FileText size={16} />
+              <FileText size={15} />
               <span>{copy.openLogsButton}</span>
             </button>
           </div>
         </section>
-      </div>
+      ) : null}
+
+      <HealthCheckPanel summary={summary} post={post} busy={busy} />
     </div>
   );
 }
@@ -1555,12 +1459,6 @@ function Services({
     (service) => service.state === "running"
   ).length;
   const canStartInstalledStack = Boolean(activePhpRuntime?.installed && activeMysqlRuntime?.installed && summary.runtimes.nginx.installed);
-  const stackServiceItems = [
-    { label: "PHP", service: summary.services.php },
-    { label: "Nginx", service: summary.services.nginx },
-    { label: activeDatabaseName, service: summary.services.mysql },
-    { label: "Redis", service: summary.services.redis }
-  ];
   const showPhp = servicesPane === "php" || servicesPane === "all";
   const showNginx = servicesPane === "nginx" || servicesPane === "all";
   const showMysql = servicesPane === "mysql" || servicesPane === "all";
@@ -1670,21 +1568,22 @@ function Services({
   }
 
   function togglePhpExtension(name: string) {
-    setPhpSettings((current) => {
-      const enabled = new Set(current.enabledExtensions);
-      if (enabled.has(name)) {
-        enabled.delete(name);
-      } else {
-        enabled.add(name);
-      }
-      return { ...current, enabledExtensions: Array.from(enabled).sort() };
-    });
+    const enabled = new Set(phpSettings.enabledExtensions);
+    if (enabled.has(name)) {
+      enabled.delete(name);
+    } else {
+      enabled.add(name);
+    }
+    const next = { ...phpSettings, enabledExtensions: Array.from(enabled).sort() };
+    setPhpSettings(next);
+    // Herd-style: persist immediately instead of waiting for the Save button.
+    void savePhpSettings(next);
   }
 
-  async function savePhpSettings() {
+  async function savePhpSettings(settings: PhpConfig = phpSettings) {
     setPhpSettingsSaving(true);
     try {
-      await post("/api/php/settings", { settings: phpSettings });
+      await post("/api/php/settings", { settings });
     } finally {
       setPhpSettingsSaving(false);
     }
@@ -1737,54 +1636,42 @@ function Services({
 
   return (
     <div className="services-view">
-      <div className="services-overview">
-        <ServiceSnapshot icon={Play} label="Running" value={`${runningServices}/4`} detail="core services" tone={runningServices === 4 ? "green" : runningServices > 0 ? "amber" : "red"} />
-        <ServiceSnapshot icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} detail={`${summary.runtimes.php.length} versions`} tone={summary.services.php.state === "running" ? "green" : "amber"} />
-        <ServiceSnapshot icon={Database} label="Databases" value={summary.services.mysql.state} detail={`${activeDatabaseLabel} · Redis`} tone={summary.services.mysql.state === "running" ? "green" : "amber"} />
-        <ServiceSnapshot icon={Server} label="Web Server" value={summary.services.nginx.state} detail={`HTTP ${summary.config.nginx.httpPort} / HTTPS ${summary.config.nginx.httpsPort}`} tone={summary.services.nginx.state === "running" ? "green" : "amber"} />
-      </div>
-
       <section className="services-command-bar">
         <div className="services-command-main">
           <ListRestart size={18} />
           <div>
-            <strong>Stack Controls</strong>
-            <span>{runningServices === 4 ? "All core services are running" : `${runningServices}/4 services running`}</span>
+            <strong>{language === "ar" ? "الخدمات" : "Services"}</strong>
+            <span>{runningServices === 4 ? (language === "ar" ? "كل الخدمات الأساسية تعمل" : "All core services are running") : `${runningServices}/4 ${language === "ar" ? "خدمات تعمل" : "services running"}`}</span>
           </div>
-        </div>
-        <div className="services-command-status">
-          {stackServiceItems.map((item) => (
-            <span key={item.label} className={`stack-service-pill ${item.service.state === "running" ? "green" : item.service.state === "stopped" ? "red" : "amber"}`}>
-              <span className={`status-dot ${item.service.state === "running" ? "green" : item.service.state === "stopped" ? "red" : "amber"}`} />
-              <strong>{item.label}</strong>
-              <small>{item.service.state}</small>
-            </span>
-          ))}
         </div>
         <div className="services-command-actions">
           <button className="primary" disabled={busy || runningServices === 4 || !canStartInstalledStack} onClick={() => void startInstalledStack()} title="Start installed stack services">
             <Play size={16} />
-            <span>Start Stack</span>
+            <span>{language === "ar" ? "تشغيل الكل" : "Start All"}</span>
           </button>
           <button disabled={busy || runningServices === 0} onClick={() => void restartRunningStack()} title="Restart currently running services">
             <RotateCw size={16} />
-            <span>Restart Running</span>
+            <span>{language === "ar" ? "إعادة تشغيل" : "Restart"}</span>
           </button>
           <button disabled={busy || runningServices === 0} onClick={() => void stopRunningStack()} title="Stop running stack services">
             <CircleStop size={16} />
-            <span>Stop Stack</span>
+            <span>{language === "ar" ? "إيقاف الكل" : "Stop All"}</span>
           </button>
         </div>
       </section>
 
       <div className="services-workbench">
         <aside className="services-list" aria-label="Service list">
-          <ServiceNavButton icon={Database} label={activeDatabaseName} detail={`:${summary.config.mysql.port}`} service={summary.services.mysql} active={servicesPane === "mysql"} onClick={() => setServicesPane("mysql")} />
-          <ServiceNavButton icon={Database} label="Redis" detail={`:${summary.config.redis.port}`} service={summary.services.redis} active={servicesPane === "redis"} onClick={() => setServicesPane("redis")} />
+          <div className="service-group-label">{language === "ar" ? "خادم الويب" : "Web Server"}</div>
+          <ServiceNavButton icon={Server} label="Nginx" detail={`Port ${summary.config.nginx.httpPort}`} service={summary.services.nginx} active={servicesPane === "nginx"} onClick={() => setServicesPane("nginx")} onStart={() => void post("/api/nginx/start")} onStop={() => void post("/api/nginx/stop")} busy={busy} language={language} />
+          <ServiceNavButton icon={SquareTerminal} label="PHP" detail={summary.config.globalPhpVersion} service={summary.services.php} active={servicesPane === "php"} onClick={() => setServicesPane("php")} onStart={() => void post("/api/php-fcgi/start")} onStop={() => void post("/api/php-fcgi/stop")} busy={busy} language={language} />
+
+          <div className="service-group-label">{language === "ar" ? "قاعدة البيانات" : "Database"}</div>
+          <ServiceNavButton icon={Database} label={activeDatabaseName} detail={`Port ${summary.config.mysql.port}`} service={summary.services.mysql} active={servicesPane === "mysql"} onClick={() => setServicesPane("mysql")} onStart={() => void post("/api/mysql/start")} onStop={() => void post("/api/mysql/stop")} busy={busy} language={language} />
           <ServiceNavButton
             icon={Database}
             label="phpMyAdmin"
-            detail={summary.phpMyAdmin.installed ? "Installed" : "Missing"}
+            detail={summary.phpMyAdmin.installed ? (language === "ar" ? "مثبّت" : "Installed") : (language === "ar" ? "غير مثبّت" : "Missing")}
             service={{
               name: "phpMyAdmin",
               state: summary.phpMyAdmin.installed ? "running" : "stopped",
@@ -1793,14 +1680,13 @@ function Services({
             active={servicesPane === "phpmyadmin"}
             onClick={() => setServicesPane("phpmyadmin")}
           />
-          <ServiceNavButton icon={SquareTerminal} label="PHP" detail={summary.config.globalPhpVersion} service={summary.services.php} active={servicesPane === "php"} onClick={() => setServicesPane("php")} />
-          <ServiceNavButton icon={Server} label="Nginx" detail={`:${summary.config.nginx.httpPort}`} service={summary.services.nginx} active={servicesPane === "nginx"} onClick={() => setServicesPane("nginx")} />
-          <button className={servicesPane === "all" ? "service-nav-item active" : "service-nav-item"} onClick={() => setServicesPane("all")} title={language === "ar" ? "كل الخدمات - عرض الحزمة كاملة" : "All Services - full stack view"}>
-            <ListRestart size={17} />
-            <div>
-              <strong>{language === "ar" ? "كل الخدمات" : "All Services"}</strong>
-              <span>{language === "ar" ? "عرض الحزمة كاملة" : "full stack view"}</span>
-            </div>
+
+          <div className="service-group-label">{language === "ar" ? "الكاش" : "Cache & Queue"}</div>
+          <ServiceNavButton icon={Database} label="Redis" detail={`Port ${summary.config.redis.port}`} service={summary.services.redis} active={servicesPane === "redis"} onClick={() => setServicesPane("redis")} onStart={() => void post("/api/redis/start")} onStop={() => void post("/api/redis/stop")} busy={busy} language={language} />
+
+          <button className={servicesPane === "all" ? "service-nav-all active" : "service-nav-all"} onClick={() => setServicesPane("all")} title={language === "ar" ? "كل الخدمات - عرض الحزمة كاملة" : "All Services - full stack view"}>
+            <ListRestart size={16} />
+            <span>{language === "ar" ? "كل الخدمات" : "All Services"}</span>
             {(() => {
               const running = [summary.services.php, summary.services.nginx, summary.services.mysql, summary.services.redis].filter((service) => service.state === "running").length;
               const tone = running === 4 ? "green" : running > 0 ? "amber" : "red";
@@ -1908,7 +1794,9 @@ function Services({
                 checked={phpSettings.xdebugEnabled}
                 disabled={phpSettingsSaving || phpSettingsLoading}
                 onChange={() => {
-                  setPhpSettings((current) => ({ ...current, xdebugEnabled: !current.xdebugEnabled }));
+                  const next = { ...phpSettings, xdebugEnabled: !phpSettings.xdebugEnabled };
+                  setPhpSettings(next);
+                  void savePhpSettings(next);
                 }}
               />
               <span>Enable Xdebug</span>
@@ -2152,7 +2040,11 @@ function ServiceNavButton({
   detail,
   service,
   active,
-  onClick
+  onClick,
+  onStart,
+  onStop,
+  busy,
+  language
 }: {
   icon: typeof Globe;
   label: string;
@@ -2160,17 +2052,39 @@ function ServiceNavButton({
   service: ServiceStatus;
   active: boolean;
   onClick: () => void;
+  onStart?: () => void;
+  onStop?: () => void;
+  busy?: boolean;
+  language?: AppLanguage;
 }) {
   const tone = service.state === "running" ? "green" : service.state === "stopped" ? "red" : "amber";
+  const running = service.state === "running";
+  const startLabel = language === "ar" ? "تشغيل" : "Start";
+  const stopLabel = language === "ar" ? "إيقاف" : "Stop";
   return (
-    <button className={active ? "service-nav-item active" : "service-nav-item"} onClick={onClick} title={`${label} - ${detail} - ${service.state}`}>
-      <Icon size={17} />
-      <div>
-        <strong>{label}</strong>
-        <span>{detail}</span>
-      </div>
-      <span className={`status-dot ${tone}`} title={service.state} />
-    </button>
+    <div className={active ? "service-nav-item active" : "service-nav-item"}>
+      <button type="button" className="service-nav-main" onClick={onClick} title={`${label} - ${detail} - ${service.state}`}>
+        <span className={`status-dot ${tone}`} title={service.state} />
+        <Icon size={17} />
+        <div>
+          <strong>{label}</strong>
+          <span>{detail}</span>
+        </div>
+      </button>
+      {onStart || onStop ? (
+        running ? (
+          <button type="button" className="service-nav-action" disabled={busy} onClick={onStop} title={`${stopLabel} ${label}`}>
+            <CircleStop size={15} />
+            <span>{stopLabel}</span>
+          </button>
+        ) : (
+          <button type="button" className="service-nav-action primary" disabled={busy} onClick={onStart} title={`${startLabel} ${label}`}>
+            <Play size={15} />
+            <span>{startLabel}</span>
+          </button>
+        )
+      ) : null}
+    </div>
   );
 }
 
@@ -2279,7 +2193,21 @@ function Sites({
   const [sitePhpVersion, setSitePhpVersion] = useState(selectedSite?.phpVersion ?? summary.config.globalPhpVersion);
   const [siteHealth, setSiteHealth] = useState<SiteHealthStatus | null>(null);
   const [siteHealthLoading, setSiteHealthLoading] = useState(false);
+  const [siteMenu, setSiteMenu] = useState<{ x: number; y: number; domain: string } | null>(null);
   const confirm = useDesktopConfirm();
+
+  useEffect(() => {
+    if (!siteMenu) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSiteMenu(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [siteMenu]);
   const laravelSitesCount = summary.sites.filter((site) => site.framework === "Laravel").length;
   const securedSitesCount = summary.sites.filter((site) => site.secured).length;
   const isolatedPhpCount = summary.sites.filter((site) => site.phpVersion !== summary.config.globalPhpVersion).length;
@@ -2432,20 +2360,7 @@ function Sites({
 
   return (
     <>
-      <section className="sites-command-center">
-        <div className="sites-command-main">
-          <FolderPlus size={18} />
-          <div>
-            <strong>Projects Workspace</strong>
-            <span>{summary.config.parkedFolders.length ? `${summary.config.parkedFolders.length} parked folders` : "Choose a folder to start managing sites"}</span>
-          </div>
-        </div>
-        <div className="sites-overview">
-          <SiteSummaryCard icon={Globe} label="Projects" value={String(summary.sites.length)} detail={`${filteredSites.length} visible`} tone={summary.sites.length ? "green" : "amber"} />
-          <SiteSummaryCard icon={PackageCheck} label="Laravel" value={String(laravelSitesCount)} detail="framework projects" tone={laravelSitesCount ? "green" : "default"} />
-          <SiteSummaryCard icon={ShieldCheck} label="HTTPS" value={`${securedSitesCount}/${summary.sites.length || 0}`} detail={summary.ssl.trusted ? "CA trusted" : "CA needs trust"} tone={summary.ssl.trusted ? "green" : "amber"} />
-          <SiteSummaryCard icon={SquareTerminal} label="PHP Overrides" value={String(isolatedPhpCount)} detail={`global PHP ${summary.config.globalPhpVersion}`} tone={isolatedPhpCount ? "amber" : "green"} />
-        </div>
+      <section className="sites-command-center herd-sites-toolbar">
         <div className="toolbar sites-toolbar">
           <div className="path-picker">
             <input value={folder} onChange={(event) => setFolder(event.target.value)} placeholder="C:\www" />
@@ -2459,7 +2374,7 @@ function Sites({
           </button>
           <button disabled={busy || !folder.trim()} onClick={() => void post("/api/sites/park", { path: folder, primary: true })}>
             <FolderOpen size={18} />
-            <span>Park Folder</span>
+            <span>{language === "ar" ? "إضافة مجلد" : "Park Folder"}</span>
           </button>
           <button disabled={busy} onClick={() => void post("/api/hosts/sync", {})}>
             <ListRestart size={18} />
@@ -2519,12 +2434,23 @@ function Sites({
             </div>
             <div className="sites-list">
               {filteredSites.map((site) => (
-                <button key={site.domain} className={site.domain === selectedSite.domain ? "site-list-item active" : "site-list-item"} onClick={() => setSelectedDomain(site.domain)} title={`${site.domain} - ${site.framework}`}>
+                <button
+                  key={site.domain}
+                  className={site.domain === selectedSite.domain ? "site-list-item active" : "site-list-item"}
+                  onClick={() => setSelectedDomain(site.domain)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setSelectedDomain(site.domain);
+                    setSiteMenu({ x: event.clientX, y: event.clientY, domain: site.domain });
+                  }}
+                  title={`${site.domain} - ${site.framework}`}
+                >
+                  {site.secured ? <Lock className="site-lock secured" size={14} /> : <LockOpen className="site-lock" size={14} />}
                   <span className="site-list-main">
                     <strong>{site.domain}</strong>
                     <span>{site.name}</span>
                   </span>
-                  <small>{site.framework}</small>
+                  <small>PHP {site.phpVersion}</small>
                 </button>
               ))}
               {filteredSites.length === 0 && summary.sites.length > 0 ? (
@@ -2560,53 +2486,6 @@ function Sites({
                   <Trash2 size={18} />
                   <span>Delete Site</span>
                 </button>
-              </div>
-            </div>
-
-            <div className="site-action-strip" aria-label="Selected site quick actions">
-              <button className="primary" onClick={() => void openExternalUrl(selectedSite.url)} title="Open site in browser">
-                <ExternalLink size={16} />
-                <span>Open Site</span>
-              </button>
-              <button disabled={busy} onClick={() => void post("/api/open-path", { path: selectedSite.path })} title="Open project folder">
-                <FolderOpen size={16} />
-                <span>Project Folder</span>
-              </button>
-              <button
-                onClick={() => {
-                  void copyTextToClipboard(selectedSite.url);
-                  showToast("Copied site URL.", "success");
-                }}
-                title="Copy site URL"
-              >
-                <Clipboard size={16} />
-                <span>Copy URL</span>
-              </button>
-              <button onClick={() => setSiteTab("commands")} title="Open site commands">
-                <SquareTerminal size={16} />
-                <span>Commands</span>
-              </button>
-              <button onClick={() => onNavigate("logs")} title="Open logs">
-                <FileText size={16} />
-                <span>Logs</span>
-              </button>
-            </div>
-
-            <div className="site-meta-strip" aria-label="Selected site summary">
-              <div className="site-meta-item">
-                <FolderOpen size={15} />
-                <span>Project Path</span>
-                <strong>{selectedSite.path}</strong>
-              </div>
-              <div className="site-meta-item">
-                <Server size={15} />
-                <span>Document Root</span>
-                <strong>{selectedSite.documentRoot}</strong>
-              </div>
-              <div className="site-meta-item">
-                <SquareTerminal size={15} />
-                <span>PHP</span>
-                <strong>{selectedSite.phpVersion}</strong>
               </div>
             </div>
 
@@ -2748,6 +2627,60 @@ function Sites({
       ) : (
         <div className="empty-state">No parked projects found.</div>
       )}
+      {siteMenu ? (
+        (() => {
+          const menuSite = summary.sites.find((site) => site.domain === siteMenu.domain);
+          if (!menuSite) {
+            return null;
+          }
+          const close = () => setSiteMenu(null);
+          const run = (action: () => void) => {
+            action();
+            close();
+          };
+          return (
+            <>
+              <div className="context-menu-backdrop" onMouseDown={close} onContextMenu={(event) => { event.preventDefault(); close(); }} />
+              <div
+                className="context-menu"
+                style={{ top: Math.min(siteMenu.y, window.innerHeight - 292), left: Math.min(siteMenu.x, window.innerWidth - 210) }}
+                role="menu"
+              >
+                <button role="menuitem" onClick={() => run(() => void openExternalUrl(menuSite.url))}>
+                  <ExternalLink size={15} />
+                  <span>{language === "ar" ? "فتح الموقع" : "Open Site"}</span>
+                </button>
+                <button role="menuitem" onClick={() => run(() => void post("/api/open-path", { path: menuSite.path }))}>
+                  <FolderOpen size={15} />
+                  <span>{language === "ar" ? "فتح المجلد" : "Open Folder"}</span>
+                </button>
+                <button role="menuitem" onClick={() => run(() => { void copyTextToClipboard(menuSite.url); showToast(language === "ar" ? "تم نسخ الرابط." : "Copied site URL.", "success"); })}>
+                  <Clipboard size={15} />
+                  <span>{language === "ar" ? "نسخ الرابط" : "Copy URL"}</span>
+                </button>
+                <div className="context-menu-separator" />
+                <button role="menuitem" disabled={busy || (menuSite.secured && !summary.ssl.trusted)} onClick={() => run(() => void post(menuSite.secured ? "/api/ssl/unsecure" : "/api/ssl/secure", { site: menuSite.domain }))}>
+                  {menuSite.secured ? <LockOpen size={15} /> : <Lock size={15} />}
+                  <span>{menuSite.secured ? (language === "ar" ? "إلغاء SSL" : "Disable SSL") : (language === "ar" ? "تفعيل SSL" : "Enable SSL")}</span>
+                </button>
+                <button role="menuitem" onClick={() => run(() => { setSelectedDomain(menuSite.domain); setSiteTab("commands"); })}>
+                  <SquareTerminal size={15} />
+                  <span>{language === "ar" ? "الأوامر" : "Commands"}</span>
+                </button>
+                <button role="menuitem" onClick={() => run(() => onNavigate("logs"))}>
+                  <FileText size={15} />
+                  <span>{language === "ar" ? "السجلات" : "Logs"}</span>
+                </button>
+                <div className="context-menu-separator" />
+                <button role="menuitem" className="context-menu-danger" disabled={busy} onClick={() => run(() => { setSelectedDomain(menuSite.domain); void deleteSelectedSite(); })}>
+                  <Trash2 size={15} />
+                  <span>{language === "ar" ? "حذف الموقع" : "Delete Site"}</span>
+                </button>
+              </div>
+            </>
+          );
+        })()
+      ) : null}
     </>
   );
 }
@@ -4099,14 +4032,6 @@ function Logs({ summary, post, busy, language }: ViewProps) {
           <Search size={14} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search logs..." />
         </div>
-        <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)}>
-          <option value="all">All services</option>
-          {services.map((service) => (
-            <option key={service} value={service}>
-              {service}
-            </option>
-          ))}
-        </select>
         <select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value as "all" | LogSeverity)}>
           <option value="all">All severity</option>
           <option value="error">Errors</option>
@@ -4184,18 +4109,9 @@ function Tools({
     { id: "ports", label: language === "ar" ? "المنافذ" : "Ports", detail: language === "ar" ? "تعارضات واقتراحات" : "conflicts and suggestions", icon: Network },
     { id: "updates", label: language === "ar" ? "التحديثات" : "Updates", detail: language === "ar" ? "الأدوات وLaravel" : "runtimes and Laravel", icon: PackageCheck }
   ];
-  const activePane = panes.find((item) => item.id === pane)!;
-  const ActivePaneIcon = activePane.icon;
 
   return (
     <div className="tools-view">
-      <div className="tools-overview">
-        <ToolSummaryCard icon={Network} label={language === "ar" ? "منافذ الويب" : "Web Ports"} value={`${summary.config.nginx.httpPort}/${summary.config.nginx.httpsPort}`} detail="HTTP / HTTPS" tone="default" />
-        <ToolSummaryCard icon={Database} label={language === "ar" ? "قاعدة البيانات" : "Database"} value={String(summary.config.mysql.port)} detail={databaseRuntimeDisplay(selectedMysqlRuntime(summary, summary.config.mysql.version))} tone="default" />
-        <ToolSummaryCard icon={Download} label={language === "ar" ? "التحديثات" : "Updates"} value={String((appUpdateAvailable ? 1 : 0) + runtimeUpdates)} detail={appUpdateAvailable ? (language === "ar" ? "تحديث التطبيق متاح" : "App update available") : (language === "ar" ? "تحديثات الأدوات" : "Runtime updates")} tone={appUpdateAvailable || runtimeUpdates ? "amber" : "green"} />
-        <ToolSummaryCard icon={PackageCheck} label={language === "ar" ? "مفقود" : "Missing"} value={String(missingRuntimes)} detail={language === "ar" ? "أدوات قابلة للتثبيت" : "installable runtimes"} tone={missingRuntimes ? "amber" : "green"} />
-      </div>
-
       <div className="settings-tabs tools-tabs" role="tablist" aria-label="Tool sections">
         {panes.map((item) => {
           const Icon = item.icon;
@@ -4209,19 +4125,6 @@ function Tools({
             </button>
           );
         })}
-      </div>
-
-      <div className="tools-focus-strip">
-        <ActivePaneIcon size={18} />
-        <div>
-          <strong>{activePane.label}</strong>
-          <span>{activePane.detail}</span>
-        </div>
-        <div className="tools-focus-meta">
-          <span>HTTP {summary.config.nginx.httpPort}</span>
-          <span>HTTPS {summary.config.nginx.httpsPort}</span>
-          <span>DB {summary.config.mysql.port}</span>
-        </div>
       </div>
 
       {pane === "ports" ? <PortTools request={request} busy={busy} /> : null}
@@ -4971,9 +4874,11 @@ function SettingsView({
   post,
   request,
   busy,
-  language
+  language,
+  onLanguageChange
 }: ViewProps & {
   request: (path: string, body?: Record<string, unknown>) => Promise<unknown>;
+  onLanguageChange: (language: AppLanguage) => void;
 }) {
   type SettingsPane = "general" | "tools" | "paths" | "security";
   const [tld, setTld] = useState(summary.config.tld);
@@ -5035,8 +4940,6 @@ function SettingsView({
     { id: "paths", label: language === "ar" ? "المسارات" : "Paths", detail: language === "ar" ? "المجلدات المرتبطة وملفات التطبيق" : "Parked folders and app files", icon: FolderOpen },
     { id: "security", label: language === "ar" ? "الأمان" : "Security", detail: language === "ar" ? "Hosts وSSL وDefender" : "Hosts, SSL, and Defender", icon: Shield }
   ];
-  const activeSettingsPane = settingsPanes.find((pane) => pane.id === settingsPane)!;
-  const ActiveSettingsIcon = activeSettingsPane.icon;
 
   useEffect(() => {
     setTld((current) => (normalizeLocalTld(current) === summary.config.tld ? summary.config.tld : current));
@@ -5158,13 +5061,6 @@ function SettingsView({
 
   return (
     <div className="settings-view">
-      <div className="settings-overview">
-        <SettingsStat icon={Globe} label="Local TLD" value={`.${summary.config.tld}`} />
-        <SettingsStat icon={FolderOpen} label="Parked" value={`${summary.config.parkedFolders.length} folders`} />
-        <SettingsStat icon={ShieldCheck} label="SSL CA" value={summary.ssl.trusted ? "Trusted" : "Untrusted"} tone={summary.ssl.trusted ? "green" : "amber"} />
-        <SettingsStat icon={SquareTerminal} label="PHP" value={summary.config.globalPhpVersion} />
-      </div>
-
       <div className="settings-tabs" role="tablist" aria-label="Settings sections">
         {settingsPanes.map((pane) => {
           const Icon = pane.icon;
@@ -5179,24 +5075,25 @@ function SettingsView({
           );
         })}
       </div>
-      <div className="settings-focus-strip">
-        <ActiveSettingsIcon size={18} />
-        <div>
-          <strong>{activeSettingsPane.label}</strong>
-          <span>{activeSettingsPane.detail}</span>
-        </div>
-        <div className="settings-focus-meta">
-          <span>{summary.config.parkedFolders.length} folders</span>
-          <span>{runningServicesCount}/4 services</span>
-          <span>{summary.ssl.trusted ? "SSL trusted" : "SSL needs trust"}</span>
-        </div>
-      </div>
       <div className="settings-layout">
         {settingsPane === "general" ? (
           <>
         <section className="settings-panel">
           <SettingsPanelHeader icon={SlidersHorizontal} title="General" detail="Local names and default runtimes" />
           <div className="settings-form-grid">
+            <label>
+              <span>{language === "ar" ? "لغة الواجهة" : "Language"}</span>
+              <div className="segmented language-segmented" aria-label={language === "ar" ? "لغة الواجهة" : "Interface language"}>
+                <button className={language === "en" ? "active" : ""} onClick={() => onLanguageChange("en")}>
+                  <Languages size={15} />
+                  <span>English</span>
+                </button>
+                <button className={language === "ar" ? "active" : ""} onClick={() => onLanguageChange("ar")}>
+                  <Languages size={15} />
+                  <span>العربية</span>
+                </button>
+              </div>
+            </label>
             <label>
               <span>Local TLD</span>
               <div className={tldValid || !tld.trim() ? "tld-field" : "tld-field invalid"}>

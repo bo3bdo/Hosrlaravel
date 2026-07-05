@@ -145,6 +145,9 @@ async function captureWithBrowser(browser: string, url: string, outputPath: stri
       "--disable-default-apps",
       "--hide-scrollbars",
       "--ignore-certificate-errors",
+      // Chrome's new headless mode can briefly flash a window on Windows;
+      // park it far off-screen so the user never sees it.
+      "--window-position=-32000,-32000",
       `--user-data-dir=${profileDir}`,
       "--window-size=1280,800",
       `--screenshot=${outputPath}`,

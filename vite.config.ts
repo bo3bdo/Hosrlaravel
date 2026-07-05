@@ -17,6 +17,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": "http://127.0.0.1:47899"
+    },
+    watch: {
+      // Tauri compiles Rust into src-tauri/target and locks .exe files there.
+      // Watching that tree makes Vite crash with EBUSY, so ignore it.
+      ignored: ["**/src-tauri/**"]
     }
   }
 });

@@ -84,10 +84,13 @@ pub fn run() {
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open laraboxs", true, None::<&str>)?;
+    let start = MenuItem::with_id(app, "start", "Start all services", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop all services", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide window", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit laraboxs", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &separator, &quit])?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&show, &sep1, &start, &stop, &hide, &sep2, &quit])?;
 
     let mut tray = TrayIconBuilder::new()
         .tooltip("laraboxs is running")
@@ -95,6 +98,8 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
+            "start" => start_all_services(),
+            "stop" => stop_all_services(),
             "hide" => hide_main_window(app),
             "quit" => quit_app(app),
             _ => {}
@@ -146,6 +151,52 @@ fn quit_app(app_handle: &tauri::AppHandle) {
         state.0.store(true, Ordering::SeqCst);
     }
     app_handle.exit(0);
+}
+
+fn post_helper_api(path: &str) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], API_PORT));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+        path = path,
+        port = API_PORT
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 512];
+    let _ = stream.read(&mut response);
+    true
+}
+
+fn start_all_services() {
+    thread::spawn(|| {
+        for path in [
+            "/api/php-fcgi/start",
+            "/api/mysql/start",
+            "/api/redis/start",
+            "/api/nginx/start",
+        ] {
+            let _ = post_helper_api(path);
+        }
+    });
+}
+
+fn stop_all_services() {
+    thread::spawn(|| {
+        for path in [
+            "/api/nginx/stop",
+            "/api/php-fcgi/stop",
+            "/api/redis/stop",
+            "/api/mysql/stop",
+        ] {
+            let _ = post_helper_api(path);
+        }
+    });
 }
 
 fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std::error::Error>> {
