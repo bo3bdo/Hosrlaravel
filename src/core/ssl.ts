@@ -6,6 +6,7 @@ import path from "node:path";
 import selfsigned from "selfsigned";
 import { updateDotEnvFile } from "./envFile.js";
 import { appendLog } from "./logging.js";
+import { adminHelperTrustCa } from "./adminHelper.js";
 import { getPaths } from "./paths.js";
 import { findSite, setSiteSecurity } from "./sites.js";
 import type { SslTrustStatus } from "./types.js";
@@ -283,6 +284,11 @@ async function runVisibleTrustCommand(caCertPath: string, wait: boolean): Promis
 
   const directCode = await runPowerShellScript(scriptPath);
   if (directCode === 0) {
+    return 0;
+  }
+
+  const adminResult = await adminHelperTrustCa(caCertPath);
+  if (adminResult.handled) {
     return 0;
   }
 

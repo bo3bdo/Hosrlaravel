@@ -7,7 +7,7 @@ import { mergeDotEnvContent } from "../src/core/envFile.js";
 import { getPaths } from "../src/core/paths.js";
 import { applyLocalDevelopmentInstallEnvironment, buildLaravelNewArgs, createNewSite } from "../src/core/laravelInstaller.js";
 import { secureSite } from "../src/core/ssl.js";
-import { addParkedFolder, deleteSite, discoverSites, isolateSite, setGlobalPhpVersion, setSiteEntryPath } from "../src/core/sites.js";
+import { addParkedFolder, deleteSite, discoverSites, isolateSite, setGlobalPhpVersion, setPrimaryParkedFolder, setSiteEntryPath } from "../src/core/sites.js";
 
 describe("site discovery", () => {
   let tempHome: string;
@@ -34,6 +34,16 @@ describe("site discovery", () => {
       ["static-site.test", "Static"]
     ]);
     expect(sites[0].documentRoot.endsWith(path.join("laravel-app", "public"))).toBe(true);
+  });
+
+  it("makes a chosen sites folder primary and removes the first-run default", async () => {
+    const defaultSites = path.join(tempHome, "Sites");
+    const customSites = path.join(tempHome, "custom-www");
+    await addParkedFolder(defaultSites);
+
+    const config = await setPrimaryParkedFolder(customSites);
+
+    expect(config.parkedFolders).toEqual([customSites]);
   });
 
   it("supports global and isolated PHP versions", async () => {

@@ -82,7 +82,7 @@ export function defaultConfig(): LaraboxsConfig {
       fastCgiHost: "127.0.0.1"
     },
     mysql: {
-      version: "9.7",
+      version: "mariadb-11.8.6",
       port: 3306,
       rootUser: "root",
       instanceName: "default"
@@ -128,7 +128,7 @@ export function normalizeConfig(input: Partial<LaraboxsConfig>): LaraboxsConfig 
   const defaults = defaultConfig();
   const parkedFolders = Array.from(
     new Set((input.parkedFolders ?? defaults.parkedFolders).map((folder) => path.resolve(folder)))
-  ).sort((a, b) => a.localeCompare(b));
+  );
 
   const securedDomains = Array.from(new Set(input.securedDomains ?? defaults.securedDomains)).sort();
   const inputPhp: Partial<LaraboxsConfig["php"]> = input.php ?? {};

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appendLog } from "./logging.js";
+import { adminHelperDefenderExclude } from "./adminHelper.js";
 import { getPaths } from "./paths.js";
 
 export interface DefenderExclusionStatus {
@@ -92,6 +93,19 @@ export async function ensureWindowsDefenderExclusion(targetPath: string): Promis
       excluded: true,
       changed: false,
       message: "Windows Defender exclusion already exists."
+    };
+  }
+
+  const adminResult = await adminHelperDefenderExclude(resolved);
+  if (adminResult.handled) {
+    await appendLog("defender", `Windows Defender exclusion added for ${resolved} via admin helper`);
+    return {
+      path: resolved,
+      platform: process.platform,
+      supported: true,
+      excluded: true,
+      changed: true,
+      message: "Windows Defender exclusion added."
     };
   }
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import http from "node:http";
@@ -116,8 +117,54 @@ export function partialDownloadPath(destination: string): string {
 export async function extractZip(zipPath: string, destination: string, scope: string): Promise<void> {
   await mkdir(destination, { recursive: true });
   await appendLog(scope, `extract started: ${zipPath}`);
+  if (process.platform === "win32") {
+    try {
+      await extractZipWithPowerShell(zipPath, destination);
+      await appendLog(scope, `extract complete: ${destination}`);
+      return;
+    } catch (error) {
+      await appendLog(scope, `PowerShell extraction failed; falling back to Node extractor: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   await extract(zipPath, { dir: path.resolve(destination) });
   await appendLog(scope, `extract complete: ${destination}`);
+}
+
+function extractZipWithPowerShell(zipPath: string, destination: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath $env:LARABOXS_ZIP -DestinationPath $env:LARABOXS_DEST -Force"
+      ],
+      {
+        env: {
+          ...process.env,
+          LARABOXS_ZIP: zipPath,
+          LARABOXS_DEST: path.resolve(destination)
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true
+      }
+    );
+
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error((stderr.trim() || `Expand-Archive exited with code ${code ?? "unknown"}`)));
+    });
+  });
 }
 
 export async function flattenSingleExtractedFolder(extractRoot: string, finalRoot: string): Promise<void> {

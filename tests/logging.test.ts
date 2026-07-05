@@ -22,6 +22,23 @@ describe("log aggregation", () => {
     expect(logs).toContain("[nginx] nginx error line");
   });
 
+  it("hides MySQL warnings caused by local status probes", async () => {
+    await mkdir(getPaths().logs, { recursive: true });
+    await writeFile(
+      path.join(getPaths().logs, "mysql-error.log"),
+      [
+        "2026-06-13 19:24:40 13180 [Warning] Aborted connection 13180 to db: 'unconnected' user: 'unauthenticated' host: '127.0.0.1' (Got an error reading communication packets)",
+        "2026-06-13 19:24:40 13180 [Warning] Aborted connection 13180 to db: 'unconnected' user: 'unauthenticated' host: '127.0.0.1' (This connection closed normally without authentication)",
+        "2026-06-13 19:24:41 13181 [ERROR] real database error"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const logs = await readRecentLogs();
+
+    expect(logs).toEqual(["[mysql] 2026-06-13 19:24:41 13181 [ERROR] real database error"]);
+  });
+
   it("clears log files without removing non-log files", async () => {
     await appendLog("mysql", "start requested");
     await writeFile(path.join(getPaths().logs, "redis.log"), "redis line\n", "utf8");

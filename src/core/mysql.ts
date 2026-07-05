@@ -5,7 +5,7 @@ import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { loadConfig, updateConfig } from "./config.js";
-import { checkPortConflict } from "./ports.js";
+import { checkPortConflict, resolveAvailablePort } from "./ports.js";
 import { appendLog } from "./logging.js";
 import { getPaths, mysqlDataForVersion, mysqlRootForVersion, toNginxPath } from "./paths.js";
 import { ensureSecret, readSecret, saveSecret } from "./secretStore.js";
@@ -13,6 +13,28 @@ import { findRuntimeEntry } from "./runtimes.js";
 import type { CommandSpec, RuntimeManifestEntry, ServiceAction, ServiceStatus } from "./types.js";
 
 const mysqlRootPasswordKey = "mysql-root-password";
+
+function mysqlBinDir(version?: string): string {
+  const root = version ? mysqlRootForVersion(version) : findRuntimeEntry("mysql").root;
+  return path.join(root, "bin");
+}
+
+function mysqlLibDir(version?: string): string {
+  const root = version ? mysqlRootForVersion(version) : findRuntimeEntry("mysql").root;
+  return path.join(root, "lib");
+}
+
+function extendEnvWithMysqlDirs(env: Record<string, string> | undefined, version?: string): Record<string, string> {
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const currentPath = env?.PATH ?? process.env.PATH ?? "";
+  const dirs = [mysqlBinDir(version), mysqlLibDir(version)];
+  const existing = currentPath.split(pathSep).map((entry) => entry.toLowerCase());
+  const additions = dirs.filter((dir) => !existing.includes(dir.toLowerCase()));
+  if (!additions.length) {
+    return env ?? {};
+  }
+  return { ...(env ?? {}), PATH: `${additions.join(pathSep)}${pathSep}${currentPath}` };
+}
 
 export function mysqlBinaryPath(binary: "mysqld" | "mysql" | "mysqladmin" | "mysqldump" = "mysqld", version?: string): string {
   const extension = process.platform === "win32" ? ".exe" : "";
@@ -67,17 +89,25 @@ export async function initializeMysqlDataDir(): Promise<ServiceStatus> {
     : {
         command: mysqlBinaryPath("mysqld", config.mysql.version),
         args: [`--defaults-file=${paths.config}`, "--initialize-insecure", `--user=${config.mysql.rootUser}`],
-        cwd: paths.root
+        cwd: paths.root,
+        env: extendEnvWithMysqlDirs(undefined, config.mysql.version)
       };
   const initCode = await runForeground(initSpec);
-  if (initCode !== 0) {
-    throw new Error(`${runtime.name} initialization exited with code ${initCode}.`);
+  if (initCode !== 0 && existsSync(marker)) {
+    // mariadb-install-db sometimes returns a non-zero code (e.g. 0xC0000135 from a
+    // post-init subprocess) even though it successfully created the system tables.
+    // Trust the marker directory as the source of truth.
+    await appendLog("mysql", `${runtime.name} init reported code ${initCode} but data directory marker exists; treating as initialized`);
+  } else if (initCode !== 0) {
+    const hint = initCode === 0xc0000135 ? " (a required Windows DLL was not found — install the Visual C++ Redistributable 2015-2022 x64 from https://aka.ms/vs/17/release/vc_redist.x64.exe)" : "";
+    throw new Error(`${runtime.name} initialization exited with code ${initCode}.${hint}`);
   }
 
   const child = startBackground({
     command: mysqlBinaryPath("mysqld", config.mysql.version),
     args: [`--defaults-file=${paths.config}`],
-    cwd: paths.root
+    cwd: paths.root,
+    env: extendEnvWithMysqlDirs(undefined, config.mysql.version)
   });
   child.once("error", (error) => {
     void appendLog("mysql", `temporary start after initialization failed: ${error.message}`);
@@ -175,7 +205,7 @@ export async function buildMysqlCommand(action: ServiceAction): Promise<CommandS
     return {
       command: mysqlBinaryPath("mysqladmin", config.mysql.version),
       args,
-      env: password ? { MYSQL_PWD: password } : undefined
+      env: extendEnvWithMysqlDirs(password ? { MYSQL_PWD: password } : undefined, config.mysql.version)
     };
   }
 
@@ -184,7 +214,7 @@ export async function buildMysqlCommand(action: ServiceAction): Promise<CommandS
     return {
       command: mysqlBinaryPath("mysqladmin", config.mysql.version),
       args: [...mysqlClientArgs(config), "shutdown"],
-      env: password ? { MYSQL_PWD: password } : undefined
+      env: extendEnvWithMysqlDirs(password ? { MYSQL_PWD: password } : undefined, config.mysql.version)
     };
   }
 
@@ -193,7 +223,8 @@ export async function buildMysqlCommand(action: ServiceAction): Promise<CommandS
   return {
     command: mysqlBinaryPath("mysqld", config.mysql.version),
     args: [`--defaults-file=${iniPath}`, `--init-file=${initFile}`],
-    cwd: paths.root
+    cwd: paths.root,
+    env: extendEnvWithMysqlDirs(undefined, config.mysql.version)
   };
 }
 
@@ -221,10 +252,10 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
     const config = await loadConfig();
     const conflict = await checkPortConflict(config.mysql.port);
     if (conflict.inUse) {
-      const occupant = conflict.processName ? ` (used by ${conflict.processName})` : "";
-      const msg = `MySQL port ${config.mysql.port} is already in use${occupant}. Stop the other process or change the MySQL port in Settings.`;
-      await appendLog("mysql", msg);
-      return { name: "mysql", state: "unknown", version: config.mysql.version, port: config.mysql.port, message: msg };
+      const nextPort = await resolveAvailablePort(config.mysql.port, [3307, 3308, 3309]);
+      const occupant = conflict.processName ? ` (was used by ${conflict.processName})` : "";
+      await setMysqlPort(nextPort);
+      await appendLog("mysql", `port auto-adjusted ${config.mysql.port} -> ${nextPort}${occupant}`);
     }
   }
 
@@ -272,11 +303,11 @@ export async function runMysql(action: ServiceAction): Promise<ServiceStatus> {
 
 export async function getMysqlStatus(message?: string): Promise<ServiceStatus> {
   const config = await loadConfig();
-  const reachable = await canConnect("127.0.0.1", config.mysql.port, 250);
+  const running = await isAppLocalMysqlRunning(config.mysql.version);
 
   return {
     name: "mysql",
-    state: reachable ? "running" : "stopped",
+    state: running ? "running" : "stopped",
     version: config.mysql.version,
     port: config.mysql.port,
     logPath: path.join(getPaths().logs, "mysql-error.log"),
@@ -468,7 +499,8 @@ function buildMariaDbInstallDbCommand(version: string, password: string, port: n
   return {
     command: mariaDbInstallDbPath(version),
     args: [`--datadir=${paths.data}`, `--password=${password}`, `--port=${port}`, `--config=${paths.config}`, "--silent"],
-    cwd: paths.root
+    cwd: paths.root,
+    env: extendEnvWithMysqlDirs(undefined, version)
   };
 }
 
@@ -490,7 +522,7 @@ async function applyRootPasswordAfterInitialization(password: string, connectPas
   await runForeground({
     command: mysqlBinaryPath("mysql", config.mysql.version),
     args: [...mysqlClientArgs(config), "-e", buildRootUserGrantSql(config.mysql.rootUser, password, runtime)],
-    env: connectPassword ? { MYSQL_PWD: connectPassword } : undefined
+    env: extendEnvWithMysqlDirs(connectPassword ? { MYSQL_PWD: connectPassword } : undefined, config.mysql.version)
   });
 }
 
@@ -733,6 +765,33 @@ async function stopAppLocalMysqlProcesses(): Promise<void> {
   } else {
     await appendLog("mysql", "fallback process stop requested for app-local mysqld.exe");
   }
+}
+
+async function isAppLocalMysqlRunning(version: string): Promise<boolean> {
+  const command = mysqlBinaryPath("mysqld", version);
+  if (isMissingWindowsMysqlBinary(command)) {
+    return false;
+  }
+
+  if (process.platform !== "win32") {
+    const config = await loadConfig();
+    return canConnect("127.0.0.1", config.mysql.port, 250);
+  }
+
+  const rootPattern = `*${mysqlRootForVersion(version).replace(/'/g, "''")}*`;
+  const script = [
+    `$rootPattern = '${rootPattern}'`,
+    "$process = Get-CimInstance Win32_Process -Filter \"name = 'mysqld.exe'\" | Where-Object { $_.CommandLine -like $rootPattern } | Select-Object -First 1",
+    "if ($process) { exit 0 }",
+    "exit 1"
+  ].join("; ");
+
+  const code = await runHidden({
+    command: "powershell.exe",
+    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+  });
+
+  return code === 0;
 }
 
 async function syncPhpMyAdminConfig(): Promise<void> {

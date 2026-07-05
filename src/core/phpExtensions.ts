@@ -80,6 +80,7 @@ export async function installPhpExtension(extension: string, phpVersion: string)
 
   const targetDll = path.join(phpRoot, "ext", `php_${extension}.dll`);
   if (existsSync(targetDll)) {
+    await enableConfiguredPhpExtension(extension);
     await ensurePhpIni(phpVersion);
     const loadCheck = moduleLoadStatus(extension, phpVersion);
     const message = await handleExtensionLoadResult(extension, phpVersion, loadCheck);
@@ -115,6 +116,7 @@ export async function installPhpExtension(extension: string, phpVersion: string)
   }
 
   await rm(extractRoot, { recursive: true, force: true });
+  await enableConfiguredPhpExtension(extension);
   await ensurePhpIni(phpVersion);
   await appendLog("php-extension", `installed ${extension} for PHP ${phpVersion} from ${downloadUrl}`);
   const loadCheck = moduleLoadStatus(extension, phpVersion);
@@ -129,6 +131,10 @@ export async function installPhpExtension(extension: string, phpVersion: string)
     downloadUrl,
     message
   };
+}
+
+export function phpExtensionLoaded(extension: string, phpVersion: string): boolean {
+  return moduleLoadStatus(extension, phpVersion).loaded;
 }
 
 export function phpExtensionDownloadUrl(extensionPackage: PhpExtensionPackage, phpVersion: string): string {
@@ -199,6 +205,21 @@ async function disableConfiguredPhpExtension(extension: string): Promise<void> {
     php: {
       ...config.php,
       enabledExtensions: nextExtensions
+    }
+  });
+}
+
+async function enableConfiguredPhpExtension(extension: string): Promise<void> {
+  const config = await loadConfig();
+  if (config.php.enabledExtensions.includes(extension)) {
+    return;
+  }
+
+  await saveConfig({
+    ...config,
+    php: {
+      ...config.php,
+      enabledExtensions: [...config.php.enabledExtensions, extension]
     }
   });
 }

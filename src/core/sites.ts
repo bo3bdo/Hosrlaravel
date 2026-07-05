@@ -25,6 +25,25 @@ export async function addParkedFolder(folder: string, options: { defenderExclusi
   });
 }
 
+export async function setPrimaryParkedFolder(folder: string, options: { defenderExclusion?: boolean } = {}): Promise<LaraboxsConfig> {
+  const resolved = path.resolve(folder);
+  await mkdir(resolved, { recursive: true });
+  if (options.defenderExclusion !== false) {
+    await tryEnsureWindowsDefenderExclusion(resolved);
+  }
+
+  const defaultSites = path.resolve(path.join(getPaths().home, "Sites"));
+  return updateConfig((config) => {
+    config.parkedFolders = [
+      resolved,
+      ...config.parkedFolders.filter((parkedFolder) => {
+        const current = path.resolve(parkedFolder);
+        return normalizePathForCompare(current) !== normalizePathForCompare(resolved) && normalizePathForCompare(current) !== normalizePathForCompare(defaultSites);
+      })
+    ];
+  });
+}
+
 export async function setGlobalPhpVersion(version: string): Promise<LaraboxsConfig> {
   return updateConfig((config) => {
     ensureKnownPhpVersion(config, version);

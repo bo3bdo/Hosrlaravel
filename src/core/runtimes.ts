@@ -3,11 +3,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { getNginxStatus } from "./nginx.js";
 import { getPhpFastCgiStatus, runPhpFastCgi } from "./php.js";
 import { appendLog } from "./logging.js";
-import { getPaths, mysqlRootForVersion, redisRootForVersion } from "./paths.js";
+import { getPaths, laraboxsHome, mysqlRootForVersion, redisRootForVersion } from "./paths.js";
 import { downloadFile, downloadsDir, extractZip, mergeSingleExtractedFolder, runtimeStatus } from "./runtimeInstaller.js";
 import type { RuntimeInstallProgress, RuntimeInstallStatus, RuntimeKind, RuntimeManifestEntry } from "./types.js";
 
@@ -325,17 +326,20 @@ export async function ensureDeveloperCommandPath(): Promise<string[]> {
 
   try {
     await ensureComposerCommandShims();
+    const cliBin = await ensureLaraboxsCliShim();
+    const allEntries = entries.includes(cliBin) ? entries : [...entries, cliBin];
     if (process.platform !== "win32" || shouldSkipPathUpdate()) {
-      return entries;
+      return allEntries;
     }
 
     const currentUserPath = readWindowsUserPath();
-    const nextUserPath = mergePathEntries(currentUserPath, entries);
+    const nextUserPath = mergePathEntries(currentUserPath, allEntries);
     if (nextUserPath !== currentUserPath) {
       writeWindowsUserPath(nextUserPath);
-      appendProcessPath(entries);
-      await appendLog("runtime", `added developer tools to user PATH: ${entries.join("; ")}`);
+      appendProcessPath(allEntries);
+      await appendLog("runtime", `added developer tools to user PATH: ${allEntries.join("; ")}`);
     }
+    return allEntries;
   } catch (error) {
     await appendLog("runtime", `failed to update developer PATH: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -343,11 +347,50 @@ export async function ensureDeveloperCommandPath(): Promise<string[]> {
   return entries;
 }
 
+async function ensureLaraboxsCliShim(): Promise<string> {
+  const binDir = path.join(laraboxsHome(), "bin");
+  await mkdir(binDir, { recursive: true });
+
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const cliPath = path.join(projectRoot, "dist", "cli", "index.js");
+  const bundledNode = path.join(projectRoot, "..", "node.exe");
+  const useBundledNode = process.platform === "win32" && existsSync(bundledNode);
+  const nodeRef = useBundledNode ? `"${bundledNode}"` : "node";
+
+  const shim = [
+    "@echo off",
+    "setlocal",
+    `if exist "${cliPath}" (`,
+    `  ${nodeRef} "${cliPath}" %*`,
+    ") else (",
+    "  echo laraboxs CLI is not available. Reinstall laraboxs to fix this.",
+    "  exit /b 1",
+    ")"
+  ].join("\r\n");
+
+  await writeFile(path.join(binDir, "laraboxs.cmd"), shim, "utf8");
+  await appendLog("runtime", `installed laraboxs CLI shim at ${path.join(binDir, "laraboxs.cmd")}`);
+  return binDir;
+}
+
 export function developerCommandPathEntries(): string[] {
   const entries = runtimeManifest();
-  const node = requiredEntry(entries, "node");
-  const composer = requiredEntry(entries, "composer");
-  return [node, composer].filter((entry) => existsSync(entry.binary)).map((entry) => entry.root);
+  return entries.flatMap((entry) => {
+    if (!existsSync(entry.binary)) {
+      return [];
+    }
+
+    switch (entry.kind) {
+      case "php":
+      case "nginx":
+      case "redis":
+      case "node":
+      case "composer":
+        return [entry.root];
+      case "mysql":
+        return [path.dirname(entry.binary)];
+    }
+  });
 }
 
 export async function ensureComposerCommandShims(): Promise<void> {

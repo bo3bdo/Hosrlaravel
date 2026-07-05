@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { appendLog } from "./logging.js";
+import { adminHelperSyncHosts } from "./adminHelper.js";
 import { getPaths } from "./paths.js";
 import { phpMyAdminSiteIfInstalled } from "./phpmyadmin.js";
 import { discoverSites } from "./sites.js";
@@ -53,13 +54,20 @@ export async function syncHostsFile(options: { dryRun?: boolean } = {}): Promise
 async function writeHostsFile(hostsFile: string, content: string): Promise<void> {
   try {
     await writeFile(hostsFile, content, "utf8");
+    return;
   } catch (error) {
     if (!needsElevatedHostsWrite(error)) {
       throw error;
     }
-
-    await writeHostsFileElevated(hostsFile, content);
   }
+
+  const adminResult = await adminHelperSyncHosts(content);
+  if (adminResult.handled) {
+    await appendLog("hosts", "hosts file synced via admin helper");
+    return;
+  }
+
+  await writeHostsFileElevated(hostsFile, content);
 }
 
 async function writeHostsFileElevated(hostsFile: string, content: string): Promise<void> {

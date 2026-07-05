@@ -1,5 +1,16 @@
 export type Framework = "Laravel" | "PHP" | "Static";
 export type ServiceState = "running" | "stopped" | "unknown";
+export type AppLanguage = "en" | "ar";
+export type DesktopConfirmTone = "default" | "warning" | "danger";
+export type DesktopConfirmOptions = {
+  title: string;
+  message?: string;
+  details?: string[];
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: DesktopConfirmTone;
+};
+export type DesktopConfirmFn = (options: DesktopConfirmOptions) => Promise<boolean>;
 
 export interface LaraboxsConfig {
   setupComplete: boolean;
@@ -147,6 +158,7 @@ export interface SiteEnvApplyResult {
   profile: SiteEnvProfile;
   createdDatabase?: string;
   databaseError?: string;
+  phpRestarted?: boolean;
 }
 
 export interface SiteDatabaseInfo {

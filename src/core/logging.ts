@@ -28,7 +28,8 @@ export async function readRecentLogs(limit = 80): Promise<string[]> {
         return [];
       }
 
-      return source.alreadyScoped ? lines : lines.map((line) => `[${source.scope}] ${line}`);
+      const filtered = source.scope === "mysql" ? lines.filter((line) => !isMysqlLocalProbeWarning(line)) : lines;
+      return source.alreadyScoped ? filtered : filtered.map((line) => `[${source.scope}] ${line}`);
     })
   );
 
@@ -180,6 +181,16 @@ function suggestedLogAction(service: string, message: string): string | undefine
     return "Move the project under a parked parent folder before using destructive site actions.";
   }
   return undefined;
+}
+
+function isMysqlLocalProbeWarning(line: string): boolean {
+  return (
+    /\baborted connection\b/i.test(line) &&
+    /\bdb:\s*'unconnected'/i.test(line) &&
+    /\buser:\s*'unauthenticated'/i.test(line) &&
+    /\bhost:\s*'127\.0\.0\.1'/i.test(line) &&
+    /\b(got an error reading communication packets|closed normally without authentication)\b/i.test(line)
+  );
 }
 
 async function readTail(filePath: string, limit: number): Promise<string[]> {

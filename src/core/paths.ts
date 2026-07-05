@@ -4,8 +4,9 @@ import { mkdir } from "node:fs/promises";
 import type { LaraboxsPaths } from "./types.js";
 
 export function laraboxsHome(): string {
-  if (process.env.LARABOXS_HOME) {
-    return path.resolve(process.env.LARABOXS_HOME);
+  const override = process.env.LARABOXS_HOME;
+  if (override && override !== "undefined") {
+    return path.resolve(override);
   }
 
   const userHome = process.env.USERPROFILE || os.homedir();

@@ -4,11 +4,13 @@ import path from "node:path";
 import { appendLog } from "./logging.js";
 import { findSite } from "./sites.js";
 import { composerCommandForDeveloperTools, developerToolEnv, npmCommandForDeveloperTools, phpBinaryForDeveloperTools } from "./developerTools.js";
+import { ensureRedisPhpClientAvailable } from "./laravelEnvSafety.js";
+import { ensurePhpIni, phpBinaryPath } from "./php.js";
 import type { CommandSpec, SiteCommandDefinition, SiteCommandKind } from "./types.js";
 
 export const siteCommandDefinitions: SiteCommandDefinition[] = [
   { id: "artisan:migrate", label: "Migrate", detail: "php artisan migrate --force" },
-  { id: "artisan:cache-clear", label: "Clear Cache", detail: "config/cache/route/view clear" },
+  { id: "artisan:cache-clear", label: "Clear Cache", detail: "config/route/view clear" },
   { id: "artisan:route-list", label: "Routes", detail: "php artisan route:list" },
   { id: "composer:install", label: "Composer Install", detail: "composer install" },
   { id: "npm:install", label: "npm Install", detail: "npm install" },
@@ -22,25 +24,31 @@ export async function buildSiteCommand(identifier: string, command: SiteCommandK
   switch (command) {
     case "artisan:migrate":
       assertLaravelProject(site.path, command);
+      await ensureRedisPhpClientAvailable(site.phpVersion);
+      const migrateIni = await ensurePhpIni(site.phpVersion);
       return {
-        command: await phpBinaryForDeveloperTools(),
-        args: ["artisan", "migrate", "--force", "--no-interaction"],
+        command: phpBinaryPath(site.phpVersion),
+        args: ["-c", migrateIni, "artisan", "migrate", "--force", "--no-interaction"],
         cwd: site.path,
         env
       };
     case "artisan:cache-clear":
       assertLaravelProject(site.path, command);
+      await ensureRedisPhpClientAvailable(site.phpVersion);
+      const clearIni = await ensurePhpIni(site.phpVersion);
       return {
-        command: await phpBinaryForDeveloperTools(),
-        args: ["artisan", "optimize:clear", "--no-interaction"],
+        command: phpBinaryPath(site.phpVersion),
+        args: ["-c", clearIni, "artisan", "optimize:clear", "--except=cache", "--no-interaction"],
         cwd: site.path,
         env
       };
     case "artisan:route-list":
       assertLaravelProject(site.path, command);
+      await ensureRedisPhpClientAvailable(site.phpVersion);
+      const routesIni = await ensurePhpIni(site.phpVersion);
       return {
-        command: await phpBinaryForDeveloperTools(),
-        args: ["artisan", "route:list", "--no-ansi"],
+        command: phpBinaryPath(site.phpVersion),
+        args: ["-c", routesIni, "artisan", "route:list", "--no-ansi"],
         cwd: site.path,
         env
       };

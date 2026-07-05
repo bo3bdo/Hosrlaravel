@@ -5,6 +5,7 @@ import path from "node:path";
 import { loadConfig } from "./config.js";
 import { tryEnsureWindowsDefenderExclusion, type DefenderExclusionStatus } from "./defender.js";
 import { updateDotEnvFile } from "./envFile.js";
+import { ensureRedisPhpClientAvailable, safeLocalLaravelDriverValues } from "./laravelEnvSafety.js";
 import { appendLog } from "./logging.js";
 import { laravelEnv, runCreateDatabase, runMysql } from "./mysql.js";
 import { getPaths } from "./paths.js";
@@ -326,8 +327,20 @@ async function configureLaravelProjectEnvironment(
   onProgress?: SiteCreationProgressReporter
 ): Promise<void> {
   const envPath = path.join(projectPath, ".env");
+  const redisAvailable = await ensureRedisPhpClientAvailable();
   const values: Record<string, string> = {
-    APP_URL: `http://${domain}`
+    APP_URL: `http://${domain}`,
+    ...(redisAvailable
+      ? {
+          REDIS_CLIENT: "phpredis",
+          REDIS_HOST: "127.0.0.1",
+          REDIS_PASSWORD: "null",
+          REDIS_PORT: String((await loadConfig()).redis.port),
+          SESSION_DRIVER: "redis",
+          CACHE_STORE: "redis",
+          QUEUE_CONNECTION: "redis"
+        }
+      : safeLocalLaravelDriverValues)
   };
 
   if (request.database === "mysql" || request.database === "mariadb") {

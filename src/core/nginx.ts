@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { loadConfig, updateConfig } from "./config.js";
 import { appendLog } from "./logging.js";
 import { getPaths, toNginxPath } from "./paths.js";
-import { checkPortConflict } from "./ports.js";
+import { checkPortConflict, resolveAvailablePort } from "./ports.js";
 import { ensurePhpFastCgiWorkers, phpFastCgiPort } from "./php.js";
 import { generatePhpMyAdminNginxConfig } from "./phpmyadmin.js";
 import { discoverSites } from "./sites.js";
@@ -194,19 +194,27 @@ export async function runNginx(action: ServiceAction): Promise<ServiceStatus> {
 
   if (action === "start" || action === "restart") {
     const config = await loadConfig();
-    const httpConflict = await checkPortConflict(config.nginx.httpPort);
+    let httpPort = config.nginx.httpPort;
+    let httpsPort = config.nginx.httpsPort;
+    let portChanged = false;
+
+    const httpConflict = await checkPortConflict(httpPort);
     if (httpConflict.inUse) {
-      const occupant = httpConflict.processName ? ` (used by ${httpConflict.processName})` : "";
-      const message = `HTTP port ${config.nginx.httpPort} is already in use${occupant}. Stop the other process or change the HTTP port in Settings.`;
-      await appendLog("nginx", message);
-      return { name: "nginx", state: "unknown", logPath: path.join(getPaths().logs, "nginx-error.log"), message };
+      httpPort = await resolveAvailablePort(httpPort, [8080, 8008, 8888]);
+      portChanged = true;
+      const occupant = httpConflict.processName ? ` (was used by ${httpConflict.processName})` : "";
+      await appendLog("nginx", `HTTP port auto-adjusted ${config.nginx.httpPort} -> ${httpPort}${occupant}`);
     }
-    const httpsConflict = await checkPortConflict(config.nginx.httpsPort);
+    const httpsConflict = await checkPortConflict(httpsPort);
     if (httpsConflict.inUse) {
-      const occupant = httpsConflict.processName ? ` (used by ${httpsConflict.processName})` : "";
-      const message = `HTTPS port ${config.nginx.httpsPort} is already in use${occupant}. Stop the other process or change the HTTPS port in Settings.`;
-      await appendLog("nginx", message);
-      return { name: "nginx", state: "unknown", logPath: path.join(getPaths().logs, "nginx-error.log"), message };
+      httpsPort = await resolveAvailablePort(httpsPort, [8443, 9443]);
+      portChanged = true;
+      const occupant = httpsConflict.processName ? ` (was used by ${httpsConflict.processName})` : "";
+      await appendLog("nginx", `HTTPS port auto-adjusted ${config.nginx.httpsPort} -> ${httpsPort}${occupant}`);
+    }
+    if (portChanged) {
+      await updateNginxSettings({ httpPort, httpsPort });
+      await writeNginxConfigs();
     }
     await ensurePhpFastCgiWorkers();
   }

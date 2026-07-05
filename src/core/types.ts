@@ -121,6 +121,7 @@ export interface SiteEnvApplyResult {
   profile: SiteEnvProfile;
   createdDatabase?: string;
   databaseError?: string;
+  phpRestarted?: boolean;
 }
 
 export interface SiteDatabaseInfo {

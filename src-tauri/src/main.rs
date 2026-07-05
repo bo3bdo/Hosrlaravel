@@ -480,9 +480,10 @@ fn helper_log_file(name: &str) -> std::io::Result<std::fs::File> {
 }
 
 fn helper_log_path(name: &str) -> std::io::Result<PathBuf> {
-    let local_app_data = env::var_os("LOCALAPPDATA")
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA is not set"))?;
-    let log_dir = PathBuf::from(local_app_data).join("laraboxs");
+    let home = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "USERPROFILE/HOME is not set"))?;
+    let log_dir = PathBuf::from(home).join(".config").join("laraboxs");
     create_dir_all(&log_dir)?;
     Ok(log_dir.join(name))
 }

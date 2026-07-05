@@ -78,3 +78,29 @@ export async function assertPortAvailable(expectedPort: number): Promise<void> {
     throw new Error(`Port ${expectedPort} is already in use${occupant}. Stop the other process or choose a different port.`);
   }
 }
+
+/**
+ * Returns the preferred port when it is free, otherwise the first available
+ * alternate. Used for silent auto port-fallback so services always start
+ * instead of blocking on a port conflict.
+ */
+export async function resolveAvailablePort(preferred: number, alternates: number[]): Promise<number> {
+  if (!(await canConnect("127.0.0.1", preferred, 100))) {
+    return preferred;
+  }
+
+  for (const alternate of alternates) {
+    if (!(await canConnect("127.0.0.1", alternate, 100))) {
+      return alternate;
+    }
+  }
+
+  const lastAlternate = alternates[alternates.length - 1] ?? preferred + 1;
+  for (let port = lastAlternate + 1; port < lastAlternate + 100; port += 1) {
+    if (!(await canConnect("127.0.0.1", port, 100))) {
+      return port;
+    }
+  }
+
+  throw new Error(`No available port found near ${preferred}.`);
+}

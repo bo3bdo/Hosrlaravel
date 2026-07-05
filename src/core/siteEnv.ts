@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { updateDotEnvFile } from "./envFile.js";
+import { ensureRedisPhpClientAvailable, safeLocalLaravelDriverValues } from "./laravelEnvSafety.js";
 import { runCreateDatabase } from "./mysql.js";
+import { runPhpFastCgi } from "./php.js";
 import { findSite, slugify } from "./sites.js";
 import { getMysqlRootPassword } from "./mysql.js";
 import type { Site, SiteDatabaseInfo, SiteEnvApplyResult, SiteEnvProfile, SiteEnvProfileKind } from "./types.js";
@@ -88,6 +90,15 @@ export async function applySiteEnvProfile(
   const envPath = path.join(site.path, ".env");
   await updateDotEnvFile(envPath, profile.values);
 
+  let phpRestarted = false;
+  if (profile.values.REDIS_CLIENT === "phpredis") {
+    const redisAvailable = await ensureRedisPhpClientAvailable(site.phpVersion);
+    if (redisAvailable) {
+      await runPhpFastCgi("restart");
+      phpRestarted = true;
+    }
+  }
+
   let createdDatabase: string | undefined;
   let databaseError: string | undefined;
   if (options.createDatabase && profile.values.DB_DATABASE) {
@@ -99,13 +110,14 @@ export async function applySiteEnvProfile(
     }
   }
 
-  return { site, envPath, profile, createdDatabase, databaseError };
+  return { site, envPath, profile, createdDatabase, databaseError, phpRestarted };
 }
 
 async function buildSiteEnvProfiles(site: Site): Promise<SiteEnvProfile[]> {
   const config = await loadConfig();
   const databaseName = siteDatabaseName(site);
   const mysqlPassword = await getMysqlRootPassword();
+  const redisAvailable = await ensureRedisPhpClientAvailable();
   const appValues = {
     APP_URL: site.url
   };
@@ -128,19 +140,30 @@ async function buildSiteEnvProfiles(site: Site): Promise<SiteEnvProfile[]> {
     CACHE_STORE: "redis",
     SESSION_DRIVER: "redis"
   };
-
-  return [
+  const profiles = [
     profile("app", "App URL", "Set APP_URL to the local laraboxs domain.", appValues),
-    profile("database", "Database", "Use the active local MySQL/MariaDB credentials.", databaseValues),
-    profile("redis", "Redis", "Use the local Redis service.", redisValues),
-    profile("queue-redis", "Queue + Redis", "Use Redis for queues, cache, and sessions.", { ...redisValues, ...queueValues }),
-    profile("full", "Full Local Stack", "Apply APP_URL, database, Redis, queue, cache, and sessions.", {
+    profile("database", "Database", "Use the active local MySQL/MariaDB credentials.", databaseValues)
+  ];
+
+  if (redisAvailable) {
+    profiles.push(
+      profile("redis", "Redis", "Use the local Redis service.", redisValues),
+      profile("queue-redis", "Queue + Redis", "Use Redis for queues, cache, and sessions.", {
+        ...redisValues,
+        ...queueValues
+      })
+    );
+  }
+
+  profiles.push(
+    profile("full", "Full Local Stack", redisAvailable ? "Apply APP_URL, database, Redis, and queue/cache/session drivers." : "Apply APP_URL, database, and safe local Laravel drivers.", {
       ...appValues,
       ...databaseValues,
-      ...redisValues,
-      ...queueValues
+      ...(redisAvailable ? { ...redisValues, ...queueValues } : safeLocalLaravelDriverValues)
     })
-  ];
+  );
+
+  return profiles;
 }
 
 function profile(id: SiteEnvProfileKind, label: string, detail: string, values: Record<string, string>): SiteEnvProfile {

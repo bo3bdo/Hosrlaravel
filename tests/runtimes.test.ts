@@ -2,11 +2,13 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ensureComposerCommandShims, getRuntimeStatus, mergePathEntries, runtimeManifest, uninstallRuntime } from "../src/core/runtimes.js";
+import { developerCommandPathEntries, ensureComposerCommandShims, getRuntimeStatus, mergePathEntries, runtimeManifest, uninstallRuntime } from "../src/core/runtimes.js";
 
 describe("runtime manifest", () => {
   beforeEach(async () => {
-    process.env.LARABOXS_HOME = await mkdir(path.join(os.tmpdir(), `laraboxs-runtimes-${Date.now()}-`), { recursive: true });
+    const tmpHome = path.join(os.tmpdir(), `laraboxs-runtimes-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(tmpHome, { recursive: true });
+    process.env.LARABOXS_HOME = tmpHome;
   });
 
   it("contains installable PHP, MySQL, MariaDB, Nginx, Redis, Node, and Composer runtimes", () => {
@@ -44,6 +46,38 @@ describe("runtime manifest", () => {
     const next = mergePathEntries(current, ["c:\\tools\\node\\", "C:\\Tools\\composer"]);
 
     expect(next).toBe("c:\\tools\\node\\;C:\\Tools\\composer;C:\\Windows");
+  });
+
+  it("adds installed command-line runtimes to the developer PATH list", async () => {
+    const installed = [
+      { kind: "php", version: "8.5", executable: "php.exe" },
+      { kind: "mysql", version: "mariadb-11.8.6", executable: path.join("bin", "mysqld.exe") },
+      { kind: "nginx", executable: "nginx.exe" },
+      { kind: "redis", executable: "redis-server.exe" },
+      { kind: "node", executable: "node.exe" },
+      { kind: "composer", executable: "composer.phar" }
+    ];
+
+    for (const item of installed) {
+      const runtime = runtimeManifest().find((entry) => entry.kind === item.kind && (!item.version || entry.version === item.version));
+      expect(runtime).toBeTruthy();
+      const binary = path.join(runtime!.root, item.executable);
+      await mkdir(path.dirname(binary), { recursive: true });
+      await writeFile(binary, "fake runtime", "utf8");
+    }
+
+    const pathEntries = developerCommandPathEntries();
+
+    expect(pathEntries).toEqual(
+      expect.arrayContaining([
+        path.join(process.env.LARABOXS_HOME!, "runtimes", "php", "8.5"),
+        path.join(process.env.LARABOXS_HOME!, "services", "mariadb", "11.8.6", "bin"),
+        path.join(process.env.LARABOXS_HOME!, "services", "nginx"),
+        path.join(process.env.LARABOXS_HOME!, "services", "redis", "8.8"),
+        path.join(process.env.LARABOXS_HOME!, "runtimes", "node", "24.16.0"),
+        path.join(process.env.LARABOXS_HOME!, "runtimes", "composer")
+      ])
+    );
   });
 
   it("creates Composer command shims beside the phar", async () => {

@@ -4,7 +4,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, updateConfig } from "../core/config.js";
-import { addParkedFolder, deleteSite, isolateSite, resetSiteEntryPath, setConfiguredPhpVersions, setGlobalPhpVersion, setSiteEntryPath, unisolateSite } from "../core/sites.js";
+import { addParkedFolder, deleteSite, isolateSite, resetSiteEntryPath, setConfiguredPhpVersions, setGlobalPhpVersion, setPrimaryParkedFolder, setSiteEntryPath, unisolateSite } from "../core/sites.js";
 import { syncHostsFile } from "../core/hosts.js";
 import {
   findAvailableMysqlPort,
@@ -140,10 +140,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/setup/complete") {
+      const pathEntries = await ensureDeveloperCommandPath();
       await updateConfig((config) => {
         config.setupComplete = true;
       });
-      await sendJson(response, { ok: true, summary: await getDashboardSummary() });
+      await sendJson(response, { ok: true, pathEntries, summary: await getDashboardSummary() });
       return;
     }
 
@@ -168,7 +169,12 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/sites/park") {
       const body = await readJson(request);
-      await addParkedFolder(assertString(body.path, "path"));
+      const makePrimary = body.primary === true;
+      if (makePrimary) {
+        await setPrimaryParkedFolder(assertString(body.path, "path"));
+      } else {
+        await addParkedFolder(assertString(body.path, "path"));
+      }
       await writeNginxConfigs();
       await sendJson(response, { ok: true, summary: await getDashboardSummary() });
       return;

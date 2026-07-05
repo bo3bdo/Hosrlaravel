@@ -1,12 +1,20 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addParkedFolder } from "../src/core/sites.js";
 import { buildSiteCommand, siteCommandDefinition } from "../src/core/siteCommands.js";
 import { dropManagedDatabase } from "../src/core/databaseManager.js";
 import { applySiteEnvProfile, siteEnvProfiles } from "../src/core/siteEnv.js";
 import { getUpdateCenterStatus } from "../src/core/updateCenter.js";
+
+vi.mock("../src/core/laravelEnvSafety.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/core/laravelEnvSafety.js")>("../src/core/laravelEnvSafety.js");
+  return {
+    ...actual,
+    ensureRedisPhpClientAvailable: vi.fn(async () => true)
+  };
+});
 
 describe("developer tools", () => {
   let tempHome: string;
@@ -32,6 +40,22 @@ describe("developer tools", () => {
       label: "Migrate",
       detail: "php artisan migrate --force"
     });
+    expect(siteCommandDefinition("artisan:cache-clear").detail).toBe("config/route/view clear");
+  });
+
+  it("runs artisan commands with the generated php.ini", async () => {
+    const command = await buildSiteCommand("laravel-app.test", "artisan:migrate");
+
+    expect(command.args[0]).toBe("-c");
+    expect(command.args[1]).toContain(path.join("php", "8.5", "php.ini"));
+    expect(command.args.slice(2)).toEqual(["artisan", "migrate", "--force", "--no-interaction"]);
+  });
+
+  it("clears Laravel bootstrap files without requiring a Redis cache connection", async () => {
+    const command = await buildSiteCommand("laravel-app.test", "artisan:cache-clear");
+
+    expect(command.args).toContain("optimize:clear");
+    expect(command.args).toContain("--except=cache");
   });
 
   it("rejects artisan commands for non-Laravel projects", async () => {
@@ -58,8 +82,12 @@ describe("developer tools", () => {
     const full = payload.profiles.find((profile) => profile.id === "full");
 
     expect(full?.block).toContain("APP_URL=http://laravel-app.test");
-    expect(full?.block).toContain("DB_CONNECTION=mysql");
+    expect(full?.block).toMatch(/DB_CONNECTION=(mysql|mariadb)/);
     expect(full?.block).toContain("REDIS_HOST=127.0.0.1");
+    expect(full?.block).toContain("SESSION_DRIVER=redis");
+    expect(full?.block).toContain("CACHE_STORE=redis");
+    expect(full?.block).toContain("QUEUE_CONNECTION=redis");
+    expect(payload.profiles.find((profile) => profile.id === "queue-redis")).toBeTruthy();
 
     await applySiteEnvProfile("laravel-app.test", "app");
     const env = await import("node:fs/promises").then((fs) => fs.readFile(path.join(parked, "laravel-app", ".env"), "utf8"));

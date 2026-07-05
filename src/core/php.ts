@@ -77,11 +77,28 @@ export async function runPhpFastCgi(action: ServiceAction): Promise<ServiceStatu
   }
 
   if (action === "start" || action === "restart") {
+    await ensureRedisExtensionForPhpVersions(config.phpVersions);
     await Promise.all(config.phpVersions.map((version) => startPhpFastCgiWorker(version)));
   }
 
   await appendLog("php", `FastCGI ${action} requested`);
   return getPhpFastCgiStatus();
+}
+
+async function ensureRedisExtensionForPhpVersions(versions: string[]): Promise<void> {
+  const { installPhpExtension } = await import("./phpExtensions.js");
+  await Promise.all(
+    versions.map(async (version) => {
+      try {
+        const status = await installPhpExtension("redis", version);
+        if (status.loaded === false && status.message) {
+          await appendLog("php", `Redis extension is not loaded for PHP ${version}: ${status.message}`);
+        }
+      } catch (error) {
+        await appendLog("php", `Redis extension setup failed for PHP ${version}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })
+  );
 }
 
 export async function getPhpSettings(version?: string): Promise<PhpSettingsStatus> {

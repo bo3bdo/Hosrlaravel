@@ -15,10 +15,13 @@ import {
 
 describe("mysql command logic", () => {
   beforeEach(async () => {
-    process.env.LARABOXS_HOME = await mkdir(path.join(os.tmpdir(), `laraboxs-mysql-${Date.now()}-`), { recursive: true });
+    const tmpHome = path.join(os.tmpdir(), `laraboxs-mysql-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(tmpHome, { recursive: true });
+    process.env.LARABOXS_HOME = tmpHome;
   });
 
-  it("generates a localhost-only my.ini", async () => {
+  it("generates a localhost-only my.ini for MySQL", async () => {
+    await setMysqlVersion("9.7");
     await setMysqlPort(3307);
     const ini = await generateMysqlIni();
 
