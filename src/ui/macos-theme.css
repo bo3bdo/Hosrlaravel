@@ -1081,3 +1081,349 @@ button.logs-summary-card.active {
 @media (max-width: 860px) {
   .sidebar { border-bottom: 1px solid var(--line); }
 }
+
+/* ============================================================
+   Professional redesign — First-run wizard & New Site panel
+   (light Herd theme; this layer loads last so these rules win)
+   ============================================================ */
+
+/* ---------- First-run wizard: shell & rail ---------- */
+.wizard-shell {
+  grid-template-columns: 288px minmax(0, 1fr);
+  background: var(--bg);
+}
+.wizard-rail {
+  background: #f7f7f9;
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: none;
+  padding: 22px 18px;
+  gap: 18px;
+}
+.wizard-rail .brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 4px;
+}
+.wizard-rail .brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(160deg, #4aa3ff 0%, var(--primary) 100%);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.32);
+}
+.wizard-rail .brand strong { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.wizard-rail .brand span { color: var(--muted); font-size: 12px; }
+
+/* Step list with a connecting spine */
+.wizard-step-list { position: relative; gap: 4px; }
+.wizard-step-list::before {
+  content: "";
+  position: absolute;
+  top: 26px;
+  bottom: 26px;
+  left: 31px;
+  width: 2px;
+  background: rgba(0, 0, 0, 0.09);
+}
+.app-shell.rtl .wizard-step-list::before { left: auto; right: 31px; }
+.wizard-step {
+  position: relative;
+  z-index: 1;
+  min-height: 52px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+  transition: background 140ms ease;
+}
+.wizard-step > span {
+  width: 30px;
+  height: 30px;
+  border: 2px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  color: var(--muted);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.wizard-step small { color: var(--muted); }
+.wizard-step:hover:not(:disabled) { background: rgba(0, 0, 0, 0.045); }
+.wizard-step.active { background: rgba(0, 122, 255, 0.09); }
+.wizard-step.active strong { color: var(--primary); }
+.wizard-step.done { background: transparent; }
+.wizard-step.active > span,
+.wizard-step.done > span {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.3);
+}
+.wizard-step:disabled { opacity: 0.55; }
+
+/* ---------- Wizard main: header, content, footer ---------- */
+.wizard-titlebar {
+  min-height: 62px;
+  background: var(--surface);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+  padding: 12px 26px;
+}
+.wizard-titlebar .eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+}
+.wizard-titlebar h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+.wizard-content { padding: 24px 26px; }
+.wizard-page { gap: 16px; max-width: 900px; }
+.wizard-copy h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+.wizard-copy .eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+}
+
+/* Cards */
+.wizard-folder-card,
+.wizard-runtime-choice {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+  padding: 16px;
+  gap: 12px;
+}
+
+/* Stack preview tiles */
+.wizard-stack-preview { gap: 12px; }
+.stack-preview-item {
+  min-height: 74px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+  padding: 12px;
+  gap: 10px;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+.stack-preview-item:hover {
+  border-color: rgba(0, 122, 255, 0.35);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+.stack-preview-item > svg {
+  width: 30px;
+  height: 30px;
+  padding: 6px;
+  border-radius: 9px;
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--primary);
+}
+.stack-preview-item strong { font-weight: 650; }
+
+/* Install step header + progress summary */
+.wizard-install-header {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+  padding: 16px 18px;
+  align-items: center;
+}
+.wizard-progress-summary { gap: 8px; }
+.wizard-progress-summary strong { font-size: 26px; font-weight: 750; letter-spacing: -0.02em; }
+
+/* The former "Customize" control — now a clean labeled secondary button */
+.wizard-progress-summary .field-icon-button {
+  position: static;
+  width: auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: linear-gradient(180deg, #ffffff 0%, #f6f6f8 100%);
+  box-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.8) inset, 0 1px 1.5px rgba(0, 0, 0, 0.08);
+}
+.wizard-progress-summary .field-icon-button:hover:not(:disabled) {
+  border-color: rgba(0, 122, 255, 0.4);
+  color: var(--primary);
+}
+
+/* Overall progress bar — light track (fixes dark leftover) */
+.progress-track { background: rgba(0, 0, 0, 0.09); }
+.wizard-overall-progress { height: 9px; }
+.wizard-overall-progress .progress-fill {
+  background: linear-gradient(90deg, #4aa3ff, var(--primary));
+}
+
+/* Task rows */
+.wizard-task-list { gap: 8px; }
+.wizard-task-toolbar {
+  padding: 0 2px;
+}
+.wizard-task-toolbar button,
+.wizard-hidden-tasks {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #ffffff 0%, #f6f6f8 100%);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.8) inset, 0 1px 1.5px rgba(0, 0, 0, 0.06);
+}
+.wizard-task-toolbar button:hover:not(:disabled),
+.wizard-hidden-tasks:hover:not(:disabled) {
+  border-color: rgba(0, 122, 255, 0.36);
+  color: var(--primary);
+}
+.wizard-hidden-tasks {
+  border-style: dashed;
+  color: var(--muted);
+}
+.wizard-task {
+  min-height: 62px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+  padding: 12px 14px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  transition: border-color 140ms ease;
+}
+.wizard-task.running { border-color: rgba(0, 122, 255, 0.35); }
+.wizard-task.complete { border-color: rgba(36, 138, 61, 0.32); }
+.wizard-task.failed { border-color: rgba(215, 0, 21, 0.32); }
+.wizard-task-icon { width: 36px; height: 36px; background: #ececf0; }
+.wizard-task.running .wizard-task-icon { color: var(--primary); background: rgba(0, 122, 255, 0.14); }
+.wizard-task.complete .wizard-task-icon { color: var(--green); background: rgba(48, 209, 88, 0.16); }
+.wizard-task.failed .wizard-task-icon { color: var(--red); background: rgba(255, 59, 48, 0.14); }
+.wizard-task-title strong { font-weight: 650; }
+.wizard-task.running .wizard-task-title span {
+  color: var(--text);
+}
+.wizard-task-progress .progress-track { height: 5px; }
+
+/* Finish step */
+.wizard-finish {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(48, 209, 88, 0.08), transparent 46%),
+    var(--surface);
+  box-shadow: var(--shadow-panel);
+  padding: 28px;
+  gap: 8px;
+}
+.wizard-finish > svg {
+  width: 52px;
+  height: 52px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(48, 209, 88, 0.14);
+  color: var(--green);
+}
+.wizard-finish .eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green);
+}
+.wizard-finish h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+
+.wizard-footer {
+  min-height: 60px;
+  background: var(--surface);
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  padding: 12px 26px;
+}
+.wizard-footer .primary { min-height: 38px; padding: 0 20px; }
+
+/* ---------- New Site panel: professional polish ---------- */
+.new-site-panel {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-elevated);
+}
+.new-site-panel-header {
+  min-height: 66px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+.new-site-title svg {
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  border-radius: 10px;
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--primary);
+}
+.new-site-title strong { font-size: 15px; font-weight: 700; }
+.new-site-form { padding: 18px; gap: 16px; }
+.new-site-fields {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-panel);
+  padding: 16px;
+  gap: 12px;
+}
+.new-site-form label > span { letter-spacing: 0.04em; }
+
+/* Preview card — light, refined (fixes dark inner boxes) */
+.new-site-preview-card {
+  border: 1px solid rgba(0, 122, 255, 0.18);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(150deg, rgba(0, 122, 255, 0.07), transparent 50%),
+    var(--surface);
+  box-shadow: var(--shadow-panel);
+  padding: 16px;
+  gap: 11px;
+}
+.new-site-preview-card > div:not(.new-site-preview-heading) {
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 7px;
+  background: var(--surface-1);
+  padding: 9px 11px;
+}
+.new-site-preview-heading strong { font-size: 14px; font-weight: 700; }
+
+/* Inline warning banner — light amber (fixes dark brown leftover) */
+.new-site-message {
+  border: 1px solid rgba(199, 107, 0, 0.34);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 149, 0, 0.1);
+  color: #9a5300;
+  margin: 0 18px;
+  padding: 9px 12px;
+}
+.new-site-message.error {
+  border-color: rgba(215, 0, 21, 0.32);
+  background: rgba(255, 59, 48, 0.09);
+  color: var(--red);
+}
+
+.new-site-actions { padding: 14px 18px; border-top: 1px solid rgba(0, 0, 0, 0.07); }
+.new-site-actions .primary { min-height: 38px; padding: 0 20px; }
+
+/* ---------- Responsive: keep the wizard rail usable on narrow widths ---------- */
+@media (max-width: 860px) {
+  .wizard-shell { grid-template-columns: 1fr; }
+  .wizard-step-list::before { display: none; }
+}

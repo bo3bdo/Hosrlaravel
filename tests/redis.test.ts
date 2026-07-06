@@ -20,6 +20,7 @@ describe("redis command logic", () => {
     expect(config).toContain("bind 127.0.0.1");
     expect(config).toContain("protected-mode yes");
     expect(config).toContain("port 46379");
+    expect(config).toContain("maxclients 3000");
     expect(config).toContain("logfile");
   });
 

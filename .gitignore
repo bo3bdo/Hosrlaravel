@@ -10,5 +10,7 @@ coverage/
 artifacts/
 src-tauri/resources/
 src-tauri/target/
+src-tauri/downloads/
+src-tauri/webview2-fixed-runtime/
 *.log
 *.tsbuildinfo

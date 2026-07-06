@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "laraboxs"
-version = "0.1.19"
+version = "0.1.27"
 dependencies = [
  "serde",
  "serde_json",

@@ -816,6 +816,7 @@ function FirstRunWizard({
   const [running, setRunning] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
   const [wizardWarning, setWizardWarning] = useState<string | null>(null);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [mysqlVersion, setMysqlVersion] = useState(() => {
     // Prefer the configured version if it's installed; otherwise prefer MariaDB
     // (it bundles its own VC++ DLLs on Windows, so it initializes reliably even
@@ -857,6 +858,25 @@ function FirstRunWizard({
   }).length;
   const setupFinished = taskDefinitions.length > 0 && resolvedCount === taskDefinitions.length;
   const setupPercent = taskDefinitions.length ? Math.round((resolvedCount / taskDefinitions.length) * 100) : 0;
+  const completedTaskCount = taskDefinitions.filter((task) => taskStates[task.id]?.status === "complete").length;
+  const activeTaskIndex = Math.max(
+    0,
+    taskDefinitions.findIndex((task) => (taskStates[task.id]?.status ?? "pending") !== "complete")
+  );
+  const compactTaskLimit = 6;
+  const visibleTaskDefinitions = showTimeline
+    ? taskDefinitions
+    : taskDefinitions.filter((task, index) => {
+        const status = taskStates[task.id]?.status ?? "pending";
+        if (status === "complete") {
+          return false;
+        }
+        if (status === "running" || status === "failed") {
+          return true;
+        }
+        return index >= activeTaskIndex && index < activeTaskIndex + compactTaskLimit;
+      });
+  const hiddenTaskCount = taskDefinitions.length - visibleTaskDefinitions.length;
 
   function updateTask(id: string, status: WizardTaskStatus, message?: string) {
     setTaskStates((current) => ({
@@ -909,6 +929,9 @@ function FirstRunWizard({
                   break;
                 case "phpmyadmin":
                   await request("/api/phpmyadmin/install");
+                  break;
+                case "laravel-installer":
+                  await request("/api/laravel-installer/install");
                   break;
                 case "php-start":
                   await request("/api/php-fcgi/start");
@@ -1057,6 +1080,7 @@ function FirstRunWizard({
                 <StackPreviewItem icon={SquareTerminal} title={`PHP ${phpVersion}`} runtime={phpRuntime} />
                 <StackPreviewItem icon={Database} title={selectedDatabaseLabel} runtime={mysqlRuntime} />
                 <StackPreviewItem icon={Server} title={`Nginx ${summary.runtimes.nginx.version}`} runtime={summary.runtimes.nginx} />
+                <StackPreviewItem icon={Database} title={`Redis ${summary.runtimes.redis.version}`} runtime={summary.runtimes.redis} />
                 <StackPreviewItem icon={PackageCheck} title="Composer stable" runtime={summary.runtimes.composer} />
                 <StackPreviewItem icon={SquareTerminal} title={`Node.js ${summary.runtimes.node.version}`} runtime={summary.runtimes.node} />
               </div>
@@ -1068,7 +1092,7 @@ function FirstRunWizard({
           ) : null}
 
           {step === "install" ? (
-            <div className="wizard-page">
+            <div className="wizard-page wizard-install-page">
               <div className="wizard-install-header">
                 <div className="wizard-copy">
                   <span className="eyebrow">{t("wizard.settingUp", language)}</span>
@@ -1093,10 +1117,29 @@ function FirstRunWizard({
               <div className="progress-track wizard-overall-progress">
                 <div className="progress-fill" style={{ width: `${setupPercent}%` }} />
               </div>
-              <div className="wizard-task-list">
-                {taskDefinitions.map((task) => (
+              <div className="wizard-task-toolbar">
+                <span>
+                  {showTimeline
+                    ? `Showing full timeline (${taskDefinitions.length} steps)`
+                    : completedTaskCount
+                      ? `${completedTaskCount} completed hidden; showing current steps`
+                      : "Showing current setup steps"}
+                </span>
+                <button type="button" onClick={() => setShowTimeline((value) => !value)} title={showTimeline ? "Hide completed timeline" : "Show full timeline"}>
+                  <ListRestart size={16} />
+                  <span>{showTimeline ? "Hide Timeline" : "Show Timeline"}</span>
+                </button>
+              </div>
+              <div className={["wizard-task-list", showTimeline ? "timeline" : "compact"].join(" ")}>
+                {visibleTaskDefinitions.map((task) => (
                   <WizardTaskRow key={task.id} task={task} state={taskStates[task.id]} installJobs={installJobs} />
                 ))}
+                {!showTimeline && hiddenTaskCount > 0 ? (
+                  <button type="button" className="wizard-hidden-tasks" onClick={() => setShowTimeline(true)}>
+                    <ListRestart size={16} />
+                    <span>{hiddenTaskCount} more steps in timeline</span>
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -1160,6 +1203,7 @@ function WizardTaskRow({ task, state, installJobs }: { task: WizardTaskDefinitio
   const status = state?.status ?? "pending";
   const runtimeJob = task.runtime ? latestRuntimeJob(Object.values(installJobs), task.runtime.kind, task.runtime.version ?? "") : undefined;
   const showRuntimeProgress = runtimeJob ? isActiveRuntimeJob(runtimeJob) || runtimeJob.status === "failed" : false;
+  const runtimePercent = runtimeJob ? Math.max(runtimeJob.percent, isActiveRuntimeJob(runtimeJob) ? 4 : 0) : 0;
 
   return (
     <div className={`wizard-task ${status}`}>
@@ -1171,7 +1215,13 @@ function WizardTaskRow({ task, state, installJobs }: { task: WizardTaskDefinitio
           <strong>{task.label}</strong>
           <span>{state?.message ?? task.detail}</span>
         </div>
-        {showRuntimeProgress && runtimeJob ? <RuntimeProgress job={runtimeJob} /> : null}
+        {showRuntimeProgress && runtimeJob ? (
+          <div className={`wizard-task-progress ${runtimeJob.status === "failed" ? "failed" : ""}`} aria-label={`${runtimeJob.name} ${runtimeJob.version} install progress`}>
+            <div className="progress-track">
+              <div className="progress-fill" style={{ width: `${runtimePercent}%` }} />
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1264,8 +1314,10 @@ function firstRunTaskDefinitions(
     { id: `php-${options.phpVersion}`, label: `Prepare PHP ${options.phpVersion}`, detail: "Download PHP CLI and FastCGI", runtime: { kind: "php", version: options.phpVersion } },
     { id: "nginx", label: "Prepare Nginx", detail: "Download the local web server", runtime: { kind: "nginx", version: summary.runtimes.nginx.version } },
     { id: `mysql-${options.mysqlVersion}`, label: `Prepare ${databaseLabel}`, detail: "Download the database runtime", runtime: { kind: "mysql", version: options.mysqlVersion } },
+    { id: "redis", label: "Prepare Redis", detail: "Download the local cache service", runtime: { kind: "redis", version: summary.runtimes.redis.version } },
     { id: "composer", label: "Prepare Composer", detail: "Install Composer for Laravel packages", runtime: { kind: "composer", version: summary.runtimes.composer.version } },
-    { id: "node", label: "Prepare Node.js", detail: "Install frontend tooling runtime", runtime: { kind: "node", version: summary.runtimes.node.version } }
+    { id: "node", label: "Prepare Node.js", detail: "Install frontend tooling runtime", runtime: { kind: "node", version: summary.runtimes.node.version } },
+    { id: "laravel-installer", label: "Install Laravel Installer", detail: "Install laravel/installer for new Laravel sites" }
   ];
 
   tasks.push({ id: "mysql-init", label: `Initialize ${databaseName}`, detail: "Create data directory and root password" });
@@ -1300,6 +1352,7 @@ function baseStackInstalled(summary: DashboardSummary): boolean {
     selectedPhpRuntime(summary, summary.config.globalPhpVersion)?.installed &&
       selectedMysqlRuntime(summary, summary.config.mysql.version)?.installed &&
       summary.runtimes.nginx.installed &&
+      summary.runtimes.redis.installed &&
       summary.runtimes.composer.installed
   );
 }

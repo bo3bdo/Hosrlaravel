@@ -39,6 +39,40 @@ describe("log aggregation", () => {
     expect(logs).toEqual(["[mysql] 2026-06-13 19:24:41 13181 [ERROR] real database error"]);
   });
 
+  it("hides benign service startup noise from diagnostics", async () => {
+    await mkdir(getPaths().logs, { recursive: true });
+    await writeFile(
+      path.join(getPaths().logs, "mysql-error.log"),
+      [
+        "2026-07-05 19:21:22 0 [Warning] 'user' entry 'root@desktop-ipatrrm' ignored in --skip-name-resolve mode.",
+        "2026-07-05 19:21:22 0 [Warning] 'proxies_priv' entry '@% root@desktop-ipatrrm' ignored in --skip-name-resolve mode.",
+        "2026-07-05 19:21:18 0 [Note] InnoDB: Doublewrite buffer not found: creating new",
+        "2026-07-05 19:21:23 0 [ERROR] real mysql error"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(getPaths().logs, "redis.log"),
+      [
+        "292:M 05 Jul 2026 19:23:00.308 # You requested maxclients of 10000 requiring at least 10032 max file descriptors.",
+        "292:M 05 Jul 2026 19:23:00.311 # Server can't set maximum open files to 10032 because of OS error: Operation not permitted.",
+        "292:M 05 Jul 2026 19:23:00.315 # Current maximum open files is 3200. maxclients has been reduced to 3168 to compensate for low ulimit.",
+        "292:M 05 Jul 2026 19:23:00.337 # WARNING: Redis does not require authentication. Redis will accept connections from any local client.",
+        "292:M 05 Jul 2026 19:23:01.000 # real redis error"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(getPaths().logs, "nginx-error.log"),
+      ["fallback process stop requested for app-local nginx.exe", "nginx real warning"].join("\n"),
+      "utf8"
+    );
+
+    const logs = await readRecentLogs();
+
+    expect(logs).toEqual(["[nginx] nginx real warning", "[mysql] 2026-07-05 19:21:23 0 [ERROR] real mysql error", "[redis] 292:M 05 Jul 2026 19:23:01.000 # real redis error"]);
+  });
+
   it("clears log files without removing non-log files", async () => {
     await appendLog("mysql", "start requested");
     await writeFile(path.join(getPaths().logs, "redis.log"), "redis line\n", "utf8");

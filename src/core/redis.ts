@@ -34,6 +34,7 @@ export async function generateRedisConfig(): Promise<string> {
     "bind 127.0.0.1 -::1",
     "protected-mode yes",
     `port ${config.redis.port}`,
+    "maxclients 3000",
     "tcp-backlog 511",
     "timeout 0",
     "tcp-keepalive 300",

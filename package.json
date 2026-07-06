@@ -1,6 +1,6 @@
 {
   "name": "laraboxs-windows",
-  "version": "0.1.19",
+  "version": "0.1.27",
   "description": "Windows-first local development manager for PHP and Laravel projects.",
   "private": true,
   "license": "MIT",
@@ -39,6 +39,7 @@
     "helper:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-helper-service.ps1",
     "package:preview": "powershell -ExecutionPolicy Bypass -File scripts/package-preview.ps1",
     "package:tauri-resources": "powershell -ExecutionPolicy Bypass -File scripts/prepare-tauri-resources.ps1",
+    "package:webview2-runtime": "powershell -ExecutionPolicy Bypass -File scripts/prepare-webview2-fixed-runtime.ps1",
     "start": "node dist/api/server.js",
     "tauri": "tauri",
     "tauri:dev": "npm run dev:tauri-prep && tauri dev",

@@ -134,13 +134,10 @@ export async function generateMysqlIni(): Promise<string> {
     `plugin-dir=${pluginDir}`,
     `port=${config.mysql.port}`,
     "bind-address=127.0.0.1",
-    "skip-name-resolve",
     `log-error=${toNginxPath(path.join(getPaths().logs, "mysql-error.log"))}`
   ];
 
-  if (isMariaDbRuntime(runtime)) {
-    mysqldLines.push("default-authentication-plugin=mysql_native_password");
-  } else {
+  if (!isMariaDbRuntime(runtime)) {
     mysqldLines.splice(6, 0, "mysqlx-bind-address=127.0.0.1");
   }
 
@@ -560,9 +557,9 @@ async function writeMysqlStartupInitFile(password: string): Promise<string> {
   const config = await loadConfig();
   const runtime = databaseRuntimeForVersion(config.mysql.version);
   const initFile = path.join(getPaths().logs, "mysql-startup-init.sql");
-  const sql = buildRootUserGrantSql(config.mysql.rootUser, password, runtime);
+  const statements = buildRootUserGrantStatements(config.mysql.rootUser, password, runtime);
   await mkdir(getPaths().logs, { recursive: true });
-  await writeFile(initFile, `${sql};\n`, "utf8");
+  await writeFile(initFile, `${statements.map((statement) => `${statement};`).join("\n")}\n`, "utf8");
   return initFile;
 }
 
@@ -588,7 +585,7 @@ function mysqlPluginDir(version: string): string {
   return toNginxPath(path.join(mysqlRootForVersion(version), "lib", "plugin"));
 }
 
-function buildRootUserGrantSql(rootUser: string, password: string, runtime: RuntimeManifestEntry): string {
+function buildRootUserGrantStatements(rootUser: string, password: string, runtime: RuntimeManifestEntry): string[] {
   const user = escapeSqlString(rootUser);
   const secret = escapeSqlString(password);
   const identified = isMariaDbRuntime(runtime)
@@ -601,7 +598,11 @@ function buildRootUserGrantSql(rootUser: string, password: string, runtime: Runt
     `ALTER USER '${user}'@'127.0.0.1' ${identified}`,
     `GRANT ALL PRIVILEGES ON *.* TO '${user}'@'127.0.0.1' WITH GRANT OPTION`,
     "FLUSH PRIVILEGES"
-  ].join("; ");
+  ];
+}
+
+function buildRootUserGrantSql(rootUser: string, password: string, runtime: RuntimeManifestEntry): string {
+  return buildRootUserGrantStatements(rootUser, password, runtime).join("; ");
 }
 
 async function repairRootUserAuthIfNeeded(): Promise<void> {

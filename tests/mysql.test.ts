@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -29,6 +29,7 @@ describe("mysql command logic", () => {
     expect(ini).toContain("bind-address=127.0.0.1");
     expect(ini).toContain("mysqlx-bind-address=127.0.0.1");
     expect(ini).toContain("plugin-dir=");
+    expect(ini).not.toContain("skip-name-resolve");
     expect(ini).toContain("default-auth=mysql_native_password");
     expect(ini).toContain("ssl=0");
     expect(ini).toContain("log-error=");
@@ -60,8 +61,25 @@ describe("mysql command logic", () => {
     expect(ini).toContain(path.join("services", "mariadb", "11.8.6").replace(/\\/g, "/"));
     expect(ini).toContain(path.join("services", "mariadb", "11.8.6", "data").replace(/\\/g, "/"));
     expect(ini).toContain(path.join("services", "mariadb", "11.8.6", "lib", "plugin").replace(/\\/g, "/"));
-    expect(ini).toContain("default-authentication-plugin=mysql_native_password");
+    expect(ini).not.toContain("skip-name-resolve");
+    expect(ini).not.toContain("default-authentication-plugin=mysql_native_password");
     expect(ini).not.toContain("mysqlx-bind-address");
+  });
+
+  it("writes startup auth SQL as one statement per line", async () => {
+    await setMysqlVersion("mariadb-11.8.6");
+    const command = await buildMysqlCommand("start");
+    const initFileArg = command.args.find((arg) => arg.startsWith("--init-file="));
+
+    expect(initFileArg).toBeTruthy();
+    const initSql = await readFile(initFileArg!.slice("--init-file=".length), "utf8");
+    const statements = initSql.trim().split(/\r?\n/);
+
+    expect(statements).toHaveLength(5);
+    expect(statements[0]).toMatch(/^ALTER USER /);
+    expect(statements[1]).toMatch(/^CREATE USER IF NOT EXISTS /);
+    expect(statements.every((statement) => statement.endsWith(";"))).toBe(true);
+    expect(initSql).not.toContain("; CREATE USER");
   });
 
   it("uses MYSQL_PWD instead of exposing passwords in command arguments", async () => {

@@ -28,7 +28,7 @@ export async function readRecentLogs(limit = 80): Promise<string[]> {
         return [];
       }
 
-      const filtered = source.scope === "mysql" ? lines.filter((line) => !isMysqlLocalProbeWarning(line)) : lines;
+      const filtered = lines.filter((line) => !isBenignStartupLogLine(source.scope, line));
       return source.alreadyScoped ? filtered : filtered.map((line) => `[${source.scope}] ${line}`);
     })
   );
@@ -191,6 +191,32 @@ function isMysqlLocalProbeWarning(line: string): boolean {
     /\bhost:\s*'127\.0\.0\.1'/i.test(line) &&
     /\b(got an error reading communication packets|closed normally without authentication)\b/i.test(line)
   );
+}
+
+function isBenignStartupLogLine(scope: string, line: string): boolean {
+  if (scope === "mysql") {
+    return (
+      isMysqlLocalProbeWarning(line) ||
+      /'user' entry 'root@[^']+' ignored in --skip-name-resolve mode/i.test(line) ||
+      /'proxies_priv' entry '@% root@[^']+' ignored in --skip-name-resolve mode/i.test(line) ||
+      /\bInnoDB:\s+Doublewrite buffer not found:\s+creating new\b/i.test(line)
+    );
+  }
+
+  if (scope === "redis") {
+    return (
+      /\brequested maxclients\b.*\bmax file descriptors\b/i.test(line) ||
+      /\bServer can't set maximum open files\b.*\bOperation not permitted\b/i.test(line) ||
+      /\bCurrent maximum open files\b.*\bmaxclients has been reduced\b/i.test(line) ||
+      /\bWARNING:\s+Redis does not require authentication\b/i.test(line)
+    );
+  }
+
+  if (scope === "nginx") {
+    return /\bfallback process stop requested for app-local nginx\.exe\b/i.test(line);
+  }
+
+  return false;
 }
 
 async function readTail(filePath: string, limit: number): Promise<string[]> {
