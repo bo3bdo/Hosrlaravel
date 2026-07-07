@@ -5,11 +5,12 @@ laraboxs is split into small layers so the dashboard, CLI, and future desktop pa
 ## Layers
 
 - `src/core`: framework detection, config storage, path resolution, hosts rendering, Nginx generation, PHP settings, FastCGI process control, MySQL/MariaDB logic, Redis logic, phpMyAdmin integration, local SSL, logs, runtime installs, site health, and update checks.
-- `src/api`: localhost helper API used by the React dashboard. After `npm run build`, this process also serves the built dashboard from `dist-ui`.
+- `src/api`: localhost helper API used by the React dashboard. After `npm run build`, this process also serves the built dashboard from `dist-ui`. Route handlers live in `src/api/routes/` and are dispatched through `src/api/router.ts`.
 - `src/cli`: command-line interface that calls the same core modules as the dashboard.
-- `src/ui`: React dashboard built with Vite and lucide-react icons.
+- `src/ui`: React dashboard built with Vite, TanStack Query, React Router, and lucide-react icons. Page components live in `src/ui/pages/`, shared UI helpers in `src/ui/shared/`, and hooks in `src/ui/hooks/`.
 - `src-tauri`: Tauri v2 wrapper scaffold for a Windows desktop package.
-- `scripts`: Windows packaging helpers and service install/status/uninstall scripts.
+- `helper-service`: Native Rust Windows service that supervises the Node helper API.
+- `scripts`: Windows packaging, code signing, and helper-service install scripts.
 - `tests`: Vitest coverage for core behavior and request security.
 
 ## Runtime Model
@@ -62,7 +63,7 @@ The API accepts trusted loopback and Tauri origins only. It validates Host and O
 
 The API exposes endpoints for:
 
-- Dashboard summary.
+- Dashboard summary and live updates through `GET /api/events` (Server-Sent Events).
 - Runtime installation jobs.
 - Site creation and per-site commands.
 - Laravel `.env` profiles.
@@ -78,6 +79,8 @@ Passwords are not passed to MySQL client commands as command-line arguments. The
 
 ## Desktop And Service Packaging
 
-The current Tauri wrapper loads the same React dashboard and can bundle a prepared Node helper payload. The helper service scripts install the built Node API server with `sc.exe` for local Windows testing.
+The current Tauri wrapper loads the same React dashboard and bundles a prepared Node helper payload. A native Rust supervisor (`helper-service/laraboxs-helper-svc.exe`) can register as the `LaraboxsHelper` Windows service to start, monitor, and restart the Node helper API.
 
-This service wrapper is a practical bridge, not the final production security model. A hardened release should use a native helper service, signed binaries, a stable update mechanism, and installer-level validation.
+Release builds can be Authenticode-signed when `WINDOWS_CERTIFICATE_THUMBPRINT` is configured. See [docs/code-signing.md](code-signing.md).
+
+The admin helper scheduled task still handles elevated hosts, CA trust, and Defender exclusions. A hardened release should add signed binaries, a stable update channel, and installer-level validation.

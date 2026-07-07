@@ -1,0 +1,9 @@
+[package]
+name = "laraboxs-helper-svc"
+version = "0.1.28"
+description = "Native Windows service supervisor for the laraboxs helper API"
+authors = ["laraboxs contributors"]
+edition = "2021"
+
+[dependencies]
+windows-service = "0.7"

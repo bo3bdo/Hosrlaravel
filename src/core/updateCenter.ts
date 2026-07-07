@@ -7,7 +7,7 @@ import type { ApplicationUpdateAsset, ApplicationUpdateStatus, LaravelInstallerS
 
 const defaultRepository = "bo3bdo/Hosrlaravel";
 const githubApiBase = "https://api.github.com";
-const fallbackAppVersion = "0.1.3";
+const fallbackAppVersion = "0.1.27";
 
 export async function getUpdateCenterStatus(): Promise<UpdateCenterStatus> {
   const appPromise = getApplicationUpdateStatus();

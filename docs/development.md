@@ -86,18 +86,20 @@ npm run clean
 ## Coding Guidelines
 
 - Keep shared behavior in `src/core` so the dashboard and CLI stay consistent.
-- Keep API handlers thin. Validate input, call core modules, and return explicit JSON payloads.
+- Keep API handlers thin in `src/api/routes/`. Validate input, call core modules, and return explicit JSON payloads.
+- Keep dashboard pages in `src/ui/pages/` and shared UI helpers in `src/ui/shared/`. Add new data-fetching logic to `src/ui/hooks/` with TanStack Query.
 - Prefer typed request/response shapes over unstructured objects.
 - Keep Windows service, certificate, hosts, and runtime mutations explicit and user-visible.
 - Avoid passing secrets in command-line arguments. Use environment variables or secret storage where possible.
 - Add or update tests when changing service command generation, config migration, API security, SSL, hosts, runtime installs, or CLI parsing.
-- Keep dashboard copy concise and action-oriented. The app is an operational tool, not a marketing page.
+- Keep dashboard copy concise and action-oriented. Put user-facing strings in `src/ui/i18n.ts` when they are shared across pages.
 
 ## Testing Strategy
 
 The Vitest suite covers:
 
 - API host/origin/token checks.
+- API router matching and route registry integration.
 - CLI parsing and command surfaces.
 - Hosts file managed block generation.
 - Nginx config generation.

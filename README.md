@@ -137,14 +137,15 @@ laraboxs install redis
 ## Project Layout
 
 ```text
-src/core      Shared domain logic for config, sites, runtimes, services, SSL, logs, and tools.
-src/api       Localhost helper API used by the dashboard.
-src/cli       Command-line interface.
-src/ui        React dashboard.
-src-tauri     Tauri v2 desktop wrapper scaffold.
-scripts       Windows packaging and helper-service scripts.
-tests         Vitest test suite.
-docs          Usage, architecture, development notes, and screenshots.
+src/core          Shared domain logic for config, sites, runtimes, services, SSL, logs, and tools.
+src/api           Localhost helper API, router, and route modules.
+src/cli           Command-line interface.
+src/ui            React dashboard (pages, hooks, shared components).
+src-tauri         Tauri v2 desktop wrapper scaffold.
+helper-service    Native Windows service supervisor for the helper API.
+scripts           Windows packaging and helper-service scripts.
+tests             Vitest test suite.
+docs              Usage, architecture, development notes, and screenshots.
 ```
 
 ## Development
@@ -173,6 +174,7 @@ Read [docs/development.md](docs/development.md) for contribution workflow, test 
 - [Usage Guide](docs/usage.md)
 - [Architecture](docs/architecture.md)
 - [Development Guide](docs/development.md)
+- [Code Signing](docs/code-signing.md)
 - [Security Policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 

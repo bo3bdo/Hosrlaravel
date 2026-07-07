@@ -1,6 +1,6 @@
 {
   "name": "laraboxs-windows",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "Windows-first local development manager for PHP and Laravel projects.",
   "private": true,
   "license": "MIT",
@@ -35,8 +35,13 @@
     "dev:tauri-prep": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-laraboxs-dev.ps1",
     "dev:tauri": "npm run dev:tauri-prep && npm run dev",
     "helper:install": "powershell -ExecutionPolicy Bypass -File scripts/install-helper-service.ps1",
+    "helper:build": "cargo build --release --manifest-path helper-service/Cargo.toml",
+    "helper:native:install": "powershell -ExecutionPolicy Bypass -File scripts/install-native-helper-service.ps1",
+    "helper:native:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-native-helper-service.ps1",
     "helper:status": "powershell -ExecutionPolicy Bypass -File scripts/helper-service-status.ps1",
     "helper:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-helper-service.ps1",
+    "sign:configure": "powershell -ExecutionPolicy Bypass -File scripts/configure-code-signing.ps1",
+    "sign:artifacts": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows-artifacts.ps1",
     "package:preview": "powershell -ExecutionPolicy Bypass -File scripts/package-preview.ps1",
     "package:tauri-resources": "powershell -ExecutionPolicy Bypass -File scripts/prepare-tauri-resources.ps1",
     "package:webview2-runtime": "powershell -ExecutionPolicy Bypass -File scripts/prepare-webview2-fixed-runtime.ps1",
@@ -47,11 +52,13 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.62.8",
     "@vitejs/plugin-react": "^5.0.0",
     "extract-zip": "^2.0.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-router-dom": "^7.1.1",
     "selfsigned": "^5.5.0"
   },
   "devDependencies": {

@@ -8,6 +8,12 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; Install the native helper Windows service when the supervisor binary is bundled.
+  IfFileExists "$INSTDIR\laraboxs-helper-svc.exe" 0 skip_native_helper
+    DetailPrint "Installing laraboxs native helper service..."
+    nsExec::ExecToLog '"$INSTDIR\laraboxs-helper-svc.exe" --install --resource-dir "$INSTDIR"'
+  skip_native_helper:
+
   ; Install the admin helper (elevated scheduled task) so hosts/CA/Defender
   ; operations run silently afterwards, with no per-action UAC prompts.
   IfFileExists "$INSTDIR\app\install-admin-helper.ps1" 0 skip_admin_helper
@@ -21,6 +27,11 @@
     DetailPrint "Removing laraboxs local services and data..."
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = ''SilentlyContinue''; $$roots = @((Join-Path $$env:USERPROFILE ''.config\laraboxs''), (Join-Path $$env:LOCALAPPDATA ''laraboxs'')); $$installDir = ''$INSTDIR''; $$port = 47899; Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $$port -State Listen | ForEach-Object { $$process = Get-CimInstance Win32_Process -Filter \"ProcessId = $$($$_.OwningProcess)\"; $$line = (($$process.ExecutablePath, $$process.CommandLine) -join '' ''); if ($$line -match ''laraboxs'') { Stop-Process -Id $$_.OwningProcess -Force } }; Get-CimInstance Win32_Process | ForEach-Object { $$path = $$_.ExecutablePath; $$commandLine = $$_.CommandLine; $$owned = $$false; if ($$installDir -and (($$path -and $$path.StartsWith($$installDir, [StringComparison]::OrdinalIgnoreCase)) -or ($$commandLine -and $$commandLine.Contains($$installDir)))) { $$owned = $$true }; foreach ($$root in $$roots) { if (($$path -and $$path.StartsWith($$root, [StringComparison]::OrdinalIgnoreCase)) -or ($$commandLine -and $$commandLine.Contains($$root))) { $$owned = $$true } }; if ($$owned) { Stop-Process -Id $$_.ProcessId -Force } }; Start-Sleep -Milliseconds 500; foreach ($$root in $$roots) { if (Test-Path -LiteralPath $$root) { Remove-Item -LiteralPath $$root -Recurse -Force } }"'
   keep_laraboxs_data:
+  ; Remove the native helper Windows service on uninstall.
+  IfFileExists "$INSTDIR\laraboxs-helper-svc.exe" 0 skip_native_helper_uninstall
+    nsExec::ExecToLog '"$INSTDIR\laraboxs-helper-svc.exe" --uninstall'
+  skip_native_helper_uninstall:
+
   ; Remove the admin helper scheduled task on uninstall.
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Unregister-ScheduledTask -TaskName ''LaraboxsAdminHelper'' -Confirm:$$false -ErrorAction SilentlyContinue"'
 !macroend

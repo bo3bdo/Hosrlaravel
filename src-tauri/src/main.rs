@@ -205,14 +205,28 @@ fn start_helper_api(resource_dir: PathBuf) -> Result<Option<Child>, Box<dyn std:
         return Ok(None);
     };
 
-    let app_dir = normalize_windows_path(resource_dir.join("app"));
-    let node = helper_node_executable(&resource_dir);
-    let server = app_dir.join("dist").join("api").join("server.js");
-
-    if helper_api_owned_by(&app_dir) {
+    if helper_api_owned_by(&normalize_windows_path(resource_dir.join("app"))) {
         log_helper_api("helper API for this installation is already listening");
         return Ok(None);
     }
+
+    if helper_api_ready() {
+        log_helper_api("helper API is already reachable");
+        return Ok(None);
+    }
+
+    #[cfg(windows)]
+    if try_start_native_helper_service(&resource_dir) {
+        wait_for_helper_api_ready(Duration::from_secs(12));
+        if helper_api_ready() {
+            log_helper_api("helper API started by native Windows service");
+            return Ok(None);
+        }
+    }
+
+    let app_dir = normalize_windows_path(resource_dir.join("app"));
+    let node = helper_node_executable(&resource_dir);
+    let server = app_dir.join("dist").join("api").join("server.js");
 
     if helper_api_ready() {
         log_helper_api("helper API port is busy; trying to stop stale laraboxs helper");
@@ -352,6 +366,62 @@ fn current_exe_path() -> PathBuf {
     env::current_exe()
         .map(normalize_windows_path)
         .unwrap_or_else(|_| PathBuf::new())
+}
+
+fn wait_for_helper_api_ready(timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if helper_api_ready() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[cfg(windows)]
+fn try_start_native_helper_service(resource_dir: &PathBuf) -> bool {
+    let helper_svc = resource_dir.join("laraboxs-helper-svc.exe");
+    if !helper_svc.is_file() {
+        return false;
+    }
+
+    let status = Command::new("sc.exe")
+        .args(["query", "LaraboxsHelper"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+
+    if status.ok().map(|value| value.success()).unwrap_or(false) {
+        let start = Command::new("sc.exe")
+            .args(["start", "LaraboxsHelper"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        return start.map(|value| value.success()).unwrap_or(false);
+    }
+
+    let install = Command::new(&helper_svc)
+        .args([
+            "--install",
+            "--resource-dir",
+            &resource_dir.display().to_string(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+
+    install.map(|value| value.success()).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn try_start_native_helper_service(_resource_dir: &PathBuf) -> bool {
+    false
 }
 
 fn wait_for_helper_api(child: &mut Child) {

@@ -24,6 +24,20 @@ Copy-Item -Path (Join-Path $repo "dist") -Destination (Join-Path $app "dist") -R
 Copy-Item -Path (Join-Path $repo "dist-ui") -Destination (Join-Path $app "dist-ui") -Recurse -Force
 Copy-Item -Path $node -Destination (Join-Path $target "node.exe") -Force
 
+$helperManifest = Join-Path $repo "helper-service\Cargo.toml"
+$helperSvcRelease = Join-Path $repo "helper-service\target\release\laraboxs-helper-svc.exe"
+if (Test-Path -LiteralPath $helperManifest) {
+  Write-Host "Building native helper service binary..."
+  cargo build --release --manifest-path $helperManifest
+  if ($LASTEXITCODE -ne 0) {
+    throw "cargo build for laraboxs-helper-svc failed with exit code $LASTEXITCODE."
+  }
+}
+
+if (Test-Path -LiteralPath $helperSvcRelease) {
+  Copy-Item -Path $helperSvcRelease -Destination (Join-Path $target "laraboxs-helper-svc.exe") -Force
+}
+
 # Bundle install/admin scripts so the NSIS installer can wire up the admin helper.
 $installScript = Join-Path $repo "scripts\install-admin-helper.ps1"
 if (Test-Path -LiteralPath $installScript) {
